@@ -1,0 +1,34 @@
+{"text": "qual é o meu limite de crédito?", "label": "credit"}
+{"text": "quero aumentar meu cartão", "label": "credit"}
+{"text": "poderia elevar meu limite pra 10 mil?", "label": "credit"}
+{"text": "consultar meu limite disponível", "label": "credit"}
+{"text": "preciso de mais crédito no cartão", "label": "credit"}
+{"text": "solicitar aumento de limite", "label": "credit"}
+{"text": "quanto posso gastar no crédito?", "label": "credit"}
+{"text": "meu limite atual por favor", "label": "credit"}
+{"text": "quero pedir aumento do limite", "label": "credit"}
+{"text": "análise de crédito e limite", "label": "credit"}
+{"text": "quanto está o dólar hoje?", "label": "exchange"}
+{"text": "cotação do euro", "label": "exchange"}
+{"text": "qual a cotação do dólar agora?", "label": "exchange"}
+{"text": "preciso saber o valor do USD", "label": "exchange"}
+{"text": "câmbio da libra esterlina", "label": "exchange"}
+{"text": "quanto vale um euro em reais?", "label": "exchange"}
+{"text": "me fala a cotação do dólar", "label": "exchange"}
+{"text": "consulta de câmbio por favor", "label": "exchange"}
+{"text": "topo fazer a entrevista financeira", "label": "interview"}
+{"text": "quero atualizar meu score", "label": "interview"}
+{"text": "pode fazer a entrevista de crédito", "label": "interview"}
+{"text": "aceito a entrevista financeira", "label": "interview"}
+{"text": "vamos atualizar meus dados financeiros", "label": "interview"}
+{"text": "quero refazer a análise de score", "label": "interview"}
+{"text": "pode encerrar, obrigado", "label": "end"}
+{"text": "tchau, até mais", "label": "end"}
+{"text": "quero finalizar o atendimento", "label": "end"}
+{"text": "pode encerrar a conversa", "label": "end"}
+{"text": "obrigado, pode terminar", "label": "end"}
+{"text": "não preciso de mais nada, adeus", "label": "end"}
+{"text": "oi", "label": "unknown"}
+{"text": "não sei o que quero", "label": "unknown"}
+{"text": "hmm", "label": "unknown"}
+{"text": "me ajuda com algo", "label": "unknown"}
