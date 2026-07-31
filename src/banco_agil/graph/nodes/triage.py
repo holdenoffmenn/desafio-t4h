@@ -107,9 +107,11 @@ def make_triage_node(deps: AppDeps):
             auth_update["messages"] = [
                 AIMessage(
                     content=(
-                        f"Olá, {nome}! Autenticação concluída. "
-                        "Posso ajudar com consulta/aumento de limite de crédito "
-                        "ou cotação de câmbio. Como posso ajudar?"
+                        f"Olá, {nome}! Autenticação concluída. Posso te ajudar com:\n"
+                        "- **Limite de crédito** — consultar seu limite atual ou "
+                        "solicitar um aumento\n"
+                        "- **Câmbio** — cotação de moedas (dólar, euro, etc.)\n\n"
+                        "Sobre qual desses assuntos você gostaria de falar?"
                     )
                 )
             ]

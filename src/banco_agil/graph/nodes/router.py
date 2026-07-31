@@ -188,9 +188,12 @@ def _clarify(
         "messages": [
             AIMessage(
                 content=(
-                    "Posso ajudar com consulta ou aumento de limite de crédito, "
-                    "cotação de câmbio, ou encerrar o atendimento. "
-                    "O que você prefere?"
+                    "Posso te ajudar com:\n"
+                    "- **Limite de crédito** — consultar seu limite atual ou "
+                    "solicitar um aumento\n"
+                    "- **Câmbio** — cotação de moedas (dólar, euro, etc.)\n"
+                    "- **Encerrar** o atendimento\n\n"
+                    "Sobre qual desses assuntos você gostaria de falar?"
                 )
             )
         ],
