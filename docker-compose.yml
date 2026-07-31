@@ -1,0 +1,52 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      API_BASE_URL: http://api:8000
+      FX_MOCK: "true"
+      DATA_DIR: /app/data
+      MODELS_DIR: /app/models
+      CHECKPOINTER_DB: /app/data/sessions.sqlite
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 25s
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command:
+      [
+        "streamlit",
+        "run",
+        "src/banco_agil/ui/streamlit_app.py",
+        "--server.port=8501",
+        "--server.address=0.0.0.0",
+      ]
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      API_BASE_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
