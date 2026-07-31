@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 from banco_agil.deps import AppDeps
 from banco_agil.domain.models import InterviewInput
 from banco_agil.graph.state import SessionState
+from banco_agil.llm.extract import LlmExtractor
 from banco_agil.tools.interview_tools import submit_interview_data_update
 from banco_agil.utils.conversation import extract_money, last_user_text
 
@@ -49,7 +51,12 @@ def make_interview_node(deps: AppDeps):
         data: dict[str, object] = dict(state.get("interview_data") or {})
 
         if not first_entry:
-            _merge_from_text(data, text)
+            # O campo perguntado no turno anterior é o primeiro pendente.
+            target = next((field for field in _FIELDS if field not in data), None)
+            if target is not None:
+                value = _interpret_field(target, text, deps.nlu)
+                if value is not None:
+                    data[target] = value
 
         missing = [field for field in _FIELDS if field not in data]
         if missing:
@@ -107,44 +114,104 @@ def make_interview_node(deps: AppDeps):
     return interview_node
 
 
-def _merge_from_text(data: dict[str, object], text: str) -> None:
-    """Preenche o próximo campo pendente a partir do texto."""
+def _interpret_field(field: str, text: str, nlu: LlmExtractor | None) -> object | None:
+    """Interpreta a resposta do campo perguntado (LLM primeiro, heurística depois).
+
+    Quando há LLM configurado, ela **lê e interpreta** a resposta em linguagem
+    natural; a heurística determinística só é usada como fallback (LLM ausente
+    ou incapaz de interpretar), garantindo degradação graciosa.
+
+    Args:
+        field: Campo pendente sendo coletado.
+        text: Resposta do usuário.
+        nlu: Extrator LLM opcional.
+
+    Returns:
+        Valor normalizado do campo ou ``None`` se não interpretável.
+    """
+    if nlu is not None:
+        value = _extract_with_llm(nlu, field, text)
+        if value is not None:
+            return value
+    return _heuristic_field(field, text)
+
+
+def _extract_with_llm(nlu: LlmExtractor, field: str, text: str) -> object | None:
+    """Interpreta o campo perguntado via LLM.
+
+    Args:
+        nlu: Extrator de linguagem natural.
+        field: Campo pendente sendo coletado.
+        text: Resposta do usuário.
+
+    Returns:
+        Valor normalizado do campo ou ``None`` se a LLM não interpretar.
+    """
+    match field:
+        case "renda_mensal":
+            return nlu.money(text, field="renda_mensal")
+        case "despesas_fixas":
+            return nlu.money(text, field="despesas_fixas")
+        case "tipo_emprego":
+            return nlu.tipo_emprego(text)
+        case "num_dependentes":
+            return nlu.num_dependentes(text)
+        case "tem_dividas":
+            return nlu.tem_dividas(text)
+        case _:  # pragma: no cover - campos são fixos em _FIELDS
+            return None
+
+
+def _heuristic_field(field: str, text: str) -> object | None:
+    """Interpretação determinística de um campo (fallback sem LLM).
+
+    Usa correspondência por tokens (não substring) em campos categóricos para
+    evitar falsos positivos como ``"nada devo"`` → ``"sim"`` (o token ``devo``
+    não deve sobrepor a negação ``nada``).
+
+    Args:
+        field: Campo pendente.
+        text: Resposta do usuário.
+
+    Returns:
+        Valor normalizado ou ``None``.
+    """
     lowered = text.lower().strip()
+    tokens = set(re.findall(r"[a-zà-ú]+", lowered))
 
-    if "renda_mensal" not in data:
-        money = extract_money(text)
-        if money is not None:
-            data["renda_mensal"] = money
-            return
-
-    if "tipo_emprego" not in data:
-        emprego = _parse_emprego(lowered)
-        if emprego is not None:
-            data["tipo_emprego"] = emprego
-            return
-
-    if "despesas_fixas" not in data:
-        money = extract_money(text)
-        if money is not None:
-            data["despesas_fixas"] = money
-            return
-
-    if "num_dependentes" not in data:
-        digits = "".join(ch for ch in text if ch.isdigit())
-        if digits:
-            data["num_dependentes"] = int(digits)
-            return
-        if any(w in lowered for w in ("nenhum", "zero", "não tenho", "nao tenho")):
-            data["num_dependentes"] = 0
-            return
-
-    if "tem_dividas" not in data:
-        # Negação é checada antes de "sim" para evitar falsos positivos
-        # em frases como "não, não tenho dívidas".
-        if any(w in lowered for w in ("não", "nao", "nenhuma", "sem", "zero", "quito")):
-            data["tem_dividas"] = "não"
-        elif any(w in lowered for w in ("sim", "tenho", "possuo", "devo", "com dívida")):
-            data["tem_dividas"] = "sim"
+    match field:
+        case "renda_mensal" | "despesas_fixas":
+            return extract_money(text)
+        case "tipo_emprego":
+            return _parse_emprego(lowered)
+        case "num_dependentes":
+            digits = "".join(ch for ch in text if ch.isdigit())
+            if digits:
+                return int(digits)
+            if tokens & {"nenhum", "nenhuma", "zero"} or "não tenho" in lowered:
+                return 0
+            return None
+        case "tem_dividas":
+            negativos = {
+                "não",
+                "nao",
+                "nenhuma",
+                "nenhum",
+                "sem",
+                "zero",
+                "quito",
+                "quitei",
+                "nada",
+            }
+            positivos = {"sim", "tenho", "possuo", "devo", "devendo", "endividado"}
+            # Negação tem prioridade (ex.: "não, nada devo").
+            if tokens & negativos:
+                return "não"
+            if tokens & positivos:
+                return "sim"
+            return None
+        case _:  # pragma: no cover - campos são fixos em _FIELDS
+            return None
 
 
 def _parse_emprego(text: str) -> Emprego | None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from banco_agil.config import Settings, get_settings
 from banco_agil.domain.auth import AuthService
@@ -15,6 +16,9 @@ from banco_agil.infrastructure.fx_client import FxClient
 from banco_agil.infrastructure.score_limit_repository import CsvScoreLimitRepository
 from banco_agil.ml.intent_router import SemanticIntentRouter
 from banco_agil.ml.safety_classifier import SafetyClassifier
+
+if TYPE_CHECKING:
+    from banco_agil.llm.extract import LlmExtractor
 
 
 @dataclass
@@ -32,6 +36,8 @@ class AppDeps:
         credit_limit: Serviço de avaliação de limite.
         intent_router: Classificador de intenções.
         safety: Filtro de segurança.
+        nlu: Extrator LLM opcional (interpreta respostas em linguagem natural).
+            ``None`` mantém o modo determinístico/heurístico.
     """
 
     settings: Settings
@@ -44,6 +50,7 @@ class AppDeps:
     credit_limit: CreditLimitService
     intent_router: SemanticIntentRouter
     safety: SafetyClassifier
+    nlu: LlmExtractor | None = None
 
 
 def build_deps(

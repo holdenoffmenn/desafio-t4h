@@ -99,6 +99,15 @@ def make_credit_node(deps: AppDeps):
         awaiting_value = bool(state.get("awaiting_limit_value"))
         awaiting_confirm = bool(state.get("awaiting_increase_confirm"))
 
+        # Fallback LLM: interpreta o valor em linguagem natural ("sete mil")
+        # quando estamos aguardando um limite e a heurística não capturou.
+        if (
+            new_limit is None
+            and deps.nlu is not None
+            and (awaiting_value or awaiting_confirm or wants_credit_increase(text))
+        ):
+            new_limit = deps.nlu.money(text, field="limite_credito")
+
         # Usuário recusou iniciar o aumento
         if awaiting_confirm and looks_like_negative(text):
             return {
