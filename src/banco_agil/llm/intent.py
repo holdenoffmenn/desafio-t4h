@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from banco_agil.llm._content import content_to_text
 from banco_agil.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -74,40 +75,13 @@ class LlmIntentClassifier:
             logger.warning("llm_intent_failed", error=str(exc))
             return None
 
-        raw = _content_to_text(response.content).lower()
+        raw = content_to_text(response.content).lower()
         # Aceita respostas ruidosas ("A intenção é credit.") pegando a
         # primeira palavra que casa com uma intenção acionável.
         for word in re.findall(r"[a-zà-ú]+", raw):
             if word in _ACTIONABLE:
                 return word
         return None
-
-
-def _content_to_text(content: Any) -> str:
-    """Normaliza o ``content`` de uma AIMessage para texto plano.
-
-    Suporta string simples e a lista de blocos (``[{'type': 'text',
-    'text': ...}]``) usada por provedores como Gemini/Anthropic.
-
-    Args:
-        content: Campo ``content`` da resposta do modelo.
-
-    Returns:
-        Texto concatenado dos blocos textuais.
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:  # type: ignore[union-attr]
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-        return " ".join(parts)
-    return str(content)
 
 
 def make_llm_intent_fallback(model: BaseChatModel | None) -> IntentFallback | None:

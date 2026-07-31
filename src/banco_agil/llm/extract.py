@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Literal
 
+from banco_agil.llm._content import content_to_text
 from banco_agil.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -183,37 +184,10 @@ class LlmExtractor:
             logger.warning("llm_extract_failed", error=str(exc))
             return None
 
-        answer = _content_to_text(response.content).strip().lower()
+        answer = content_to_text(response.content).strip().lower()
         if answer in _NULL_TOKENS:
             return None
         return answer
-
-
-def _content_to_text(content: object) -> str:
-    """Normaliza o ``content`` de uma resposta do modelo para texto plano.
-
-    Suporta string simples e a lista de blocos (``[{'type': 'text',
-    'text': ...}]``) usada por provedores como Gemini/Anthropic.
-
-    Args:
-        content: Campo ``content`` da resposta do modelo.
-
-    Returns:
-        Texto concatenado dos blocos textuais.
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                value = block.get("text")
-                if isinstance(value, str):
-                    parts.append(value)
-        return " ".join(parts)
-    return str(content)
 
 
 def make_llm_extractor(model: BaseChatModel | None) -> LlmExtractor | None:
