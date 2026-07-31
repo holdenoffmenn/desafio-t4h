@@ -2,34 +2,40 @@
 
 > Status: 🟡 = rascunho da estratégia · ✅ = validado no código · 🔲 = pendente.
 > Referência de escopo: [`../../PROMPT-IMPLEMENTACAO.md`](../../PROMPT-IMPLEMENTACAO.md) (Parte 4).
+>
+> **Parte 4 implementada e validada** (redaction + tracer no-op + suíte verde).
 
 ---
 
 ## Observabilidade
 
-### `infrastructure.langfuse_tracer` — trace/spans/eventos — 🟡
+### `infrastructure.langfuse_tracer.SessionTracer.record_turn` — ✅
 
 ```mermaid
 flowchart TD
-    A[invoke do grafo] --> H{Langfuse disponível?}
-    H -- Não --> DEG[seguir sem trace<br/>log local structlog]
+    A[invoke do grafo / chat] --> H{Langfuse keys + SDK?}
+    H -- Não --> DEG[no-op + structlog local]
     H -- Sim --> TR[Trace session_id, cpf_masked]
-    TR --> SP[Spans por nó:<br/>node:guard, node:router, agent:*, tool:*]
-    SP --> EV[Eventos:<br/>input_blocked, router_fallback_llm,<br/>auth_failed, credit_rejected]
-    EV --> URL[get_trace_url -> metadata.langfuse_trace_url]
+    TR --> SP[Span node/agent ativo]
+    SP --> EV[Eventos: input_blocked, auth_failed,<br/>credit_rejected, router_fallback_llm]
+    EV --> URL[trace_url -> metadata.langfuse_trace_url]
+    DEG --> LOG[chat_turn log com PII redigida]
+    URL --> LOG
 ```
 
-### `observability.logging` — redaction de PII — 🟡
+### `observability.logging.redact_pii` — ✅
 
 ```mermaid
 flowchart TD
     A[evento de log] --> P[processador structlog]
     P --> C{campo sensível?}
     C -- cpf --> M[mascarar ***]
-    C -- data_nascimento --> D[remover do log]
+    C -- data_nascimento --> D[remover / REDACTED]
+    C -- string com CPF --> S[regex substitute ***]
     C -- demais --> K[manter]
     M --> OUT[emitir log estruturado]
     D --> OUT
+    S --> OUT
     K --> OUT
 ```
 
@@ -37,11 +43,11 @@ flowchart TD
 
 ## Infraestrutura de entrega
 
-### `docker-compose` — ordem de subida — 🟡
+### `docker-compose` — ordem de subida — ✅
 
 ```mermaid
 flowchart TD
-    A[docker compose up] --> B[build imagem única multi-stage]
+    A[docker compose up] --> B[build imagem multi-stage]
     B --> API[serviço api: uvicorn]
     API --> HC{healthcheck /health OK?}
     HC -- Não --> RETRY[retries até start_period]
