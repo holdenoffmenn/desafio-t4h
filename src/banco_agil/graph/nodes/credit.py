@@ -216,6 +216,30 @@ def _process_increase(
     if isinstance(tool_result, dict) and tool_result.get("reason"):
         reason = str(tool_result["reason"])
 
+    # Reanálise pós-entrevista: a entrevista já ocorreu, então não a
+    # re-oferecemos (evita loop). Limpamos o estado pendente e informamos o
+    # teto que o score atualizado permite.
+    if reanalysis:
+        max_allowed = deps.score_limits.get_max_limit_for_score(customer.score)
+        update["interview_complete"] = False
+        update["pending_new_limit"] = None
+        update["offered_interview"] = False
+        update["interview_accepted"] = False
+        if reason == "limite_menor_que_atual":
+            body = (
+                f"O valor solicitado (R$ {format_brl(new_limit)}) não é maior que seu "
+                f"limite atual de R$ {format_brl(customer.limite_atual)}."
+            )
+        else:
+            body = (
+                f"Mesmo após a atualização, seu score ({customer.score}) permite um "
+                f"limite de até R$ {format_brl(max_allowed)}, abaixo dos "
+                f"R$ {format_brl(new_limit)} solicitados. Posso registrar um aumento "
+                f"de até R$ {format_brl(max_allowed)}, se desejar."
+            )
+        update["messages"] = [AIMessage(content=f"{body} Posso ajudar com mais alguma coisa?")]
+        return update
+
     already_offered = bool(state.get("offered_interview"))
     if not already_offered:
         offer = offer_credit_interview_update()
