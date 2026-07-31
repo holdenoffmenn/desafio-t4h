@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -11,6 +13,9 @@ import httpx
 import streamlit as st
 
 from banco_agil.config import get_settings
+
+# Velocidade do efeito de digitação (segundos por palavra) no streaming do cliente.
+_STREAM_DELAY_S = 0.02
 
 
 def _api_base() -> str:
@@ -28,6 +33,8 @@ def _ensure_session() -> None:
         st.session_state.last_metadata = None
     if "ended" not in st.session_state:
         st.session_state.ended = False
+    if "pending" not in st.session_state:
+        st.session_state.pending = None
 
 
 def _post_chat(session_id: str, message: str) -> dict[str, Any]:
@@ -60,6 +67,25 @@ def _new_session() -> None:
     st.session_state.messages = []
     st.session_state.last_metadata = None
     st.session_state.ended = False
+    st.session_state.pending = None
+
+
+def _stream_reply(text: str) -> Iterator[str]:
+    """Gera a resposta em pedaços para um efeito de digitação suave.
+
+    As respostas são determinísticas (geradas no backend), então o streaming
+    é apenas visual: emite palavra a palavra com um pequeno atraso.
+
+    Args:
+        text: Resposta completa da API.
+
+    Yields:
+        Fragmentos de texto (palavra + espaço).
+    """
+    parts = text.split(" ")
+    for index, word in enumerate(parts):
+        yield word + (" " if index < len(parts) - 1 else "")
+        time.sleep(_STREAM_DELAY_S)
 
 
 def _render_client_tab() -> None:
@@ -71,51 +97,71 @@ def _render_client_tab() -> None:
         with st.chat_message(item["role"]):
             st.markdown(item["content"])
 
+    # Há uma mensagem do usuário já exibida aguardando resposta: processa agora
+    # com feedback visual (spinner) e streaming.
+    if st.session_state.pending is not None:
+        _process_pending()
+
+    busy = st.session_state.pending is not None
     cols = st.columns([1, 1, 4])
     with cols[0]:
-        if st.button("Nova sessão", use_container_width=True):
+        if st.button("Nova sessão", width="stretch", disabled=busy):
             _new_session()
             st.rerun()
     with cols[1]:
         end_clicked = st.button(
             "Encerrar atendimento",
-            use_container_width=True,
-            disabled=st.session_state.ended,
+            width="stretch",
+            disabled=st.session_state.ended or busy,
         )
 
     if end_clicked and not st.session_state.ended:
-        _send_and_render("quero encerrar o atendimento")
+        _queue_message("quero encerrar o atendimento")
 
     prompt = st.chat_input(
         "Digite sua mensagem…",
         disabled=st.session_state.ended,
     )
     if prompt:
-        _send_and_render(prompt)
+        _queue_message(prompt)
 
 
-def _send_and_render(text: str) -> None:
-    """Envia mensagem à API e atualiza o histórico local."""
+def _queue_message(text: str) -> None:
+    """Adiciona a mensagem do usuário e re-renderiza imediatamente.
+
+    O ``rerun`` faz a mensagem aparecer na hora; o processamento (chamada à
+    API) acontece no próximo ciclo, em ``_process_pending``.
+
+    Args:
+        text: Texto do usuário.
+    """
     st.session_state.messages.append({"role": "user", "content": text})
-    try:
-        data = _post_chat(st.session_state.session_id, text)
-        reply = str(data.get("reply", ""))
-        meta = data.get("metadata")
-        st.session_state.messages.append({"role": "assistant", "content": reply})
-        st.session_state.last_metadata = meta
-        if isinstance(meta, dict) and meta.get("should_end"):
-            st.session_state.ended = True
-    except httpx.HTTPError as exc:
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": (
-                    "Não foi possível falar com o servidor agora. "
-                    f"Verifique se a API está no ar ({_api_base()}). "
-                    f"Detalhe: {exc.__class__.__name__}"
-                ),
-            }
-        )
+    st.session_state.pending = text
+    st.rerun()
+
+
+def _process_pending() -> None:
+    """Chama a API para a mensagem pendente, com spinner e streaming."""
+    text = str(st.session_state.pending)
+    with st.chat_message("assistant"):
+        try:
+            with st.spinner("Processando…"):
+                data = _post_chat(st.session_state.session_id, text)
+            reply = str(data.get("reply", ""))
+            meta = data.get("metadata")
+            st.write_stream(_stream_reply(reply))
+            st.session_state.last_metadata = meta
+            if isinstance(meta, dict) and meta.get("should_end"):
+                st.session_state.ended = True
+        except httpx.HTTPError as exc:
+            reply = (
+                "Não foi possível falar com o servidor agora. "
+                f"Verifique se a API está no ar ({_api_base()}). "
+                f"Detalhe: {exc.__class__.__name__}"
+            )
+            st.markdown(reply)
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+    st.session_state.pending = None
     st.rerun()
 
 
@@ -161,7 +207,7 @@ def _render_backoffice_tab() -> None:
     st.markdown("#### Tools executadas")
     tools = meta.get("last_tool_calls") or []
     if tools:
-        st.dataframe(tools, use_container_width=True)
+        st.dataframe(tools, width="stretch")
     else:
         st.write("_Nenhuma tool neste turno._")
 
