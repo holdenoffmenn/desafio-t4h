@@ -32,7 +32,7 @@ embeddings = [
     "sentence-transformers>=3.0",
 ]
 observability = [
-    "langfuse>=2.60",
+    "langfuse>=4.0",
 ]
 # Provedores de LLM — instale apenas o(s) que for usar (LLM_PROVIDER no .env).
 llm-gemini = [

@@ -139,31 +139,39 @@ class SessionTracer:
         events: list[str],
         cpf_masked: str | None,
     ) -> TurnTraceResult:
-        """Persiste trace no Langfuse (API v2-style)."""
+        """Persiste o trace no Langfuse (SDK v3/v4, baseado em OpenTelemetry).
+
+        Usa ``create_trace_id`` + ``start_observation`` (span raiz da sessão e
+        span do nó ativo) e anexa os eventos de negócio. ``session_id`` e demais
+        atributos vão no nome do trace e na metadata (a v4 não expõe
+        ``update_trace`` fora de context manager).
+        """
         client = self._client
         assert client is not None
 
         active_agent = str(state.get("active_agent") or "unknown")
-        trace_name = f"session_{session_id}"
+        trace_id: str = client.create_trace_id()
 
-        # API Langfuse Python: client.trace(...) — tolerante a mudanças menores
-        trace = client.trace(
-            name=trace_name,
-            session_id=session_id,
+        root = client.start_observation(
+            trace_context={"trace_id": trace_id},
+            name=f"session_{session_id}",
+            as_type="span",
             metadata={
+                "session_id": session_id,
                 "authenticated": bool(state.get("authenticated")),
                 "cpf_masked": cpf_masked,
                 "active_agent": active_agent,
                 "intent": state.get("intent"),
             },
         )
-        trace_id = str(getattr(trace, "id", None) or uuid4())
 
         span_name = f"agent:{active_agent}"
         if active_agent in {"guard", "router"}:
             span_name = f"node:{active_agent}"
-        span = trace.span(
+        node_span = client.start_observation(
+            trace_context={"trace_id": trace_id, "parent_span_id": root.id},
             name=span_name,
+            as_type="span",
             metadata={
                 "route_source": state.get("route_source"),
                 "route_confidence": state.get("route_confidence"),
@@ -173,16 +181,15 @@ class SessionTracer:
             },
         )
         for event_name in events:
-            span.event(name=event_name)
-        span.end()
+            node_span.create_event(name=event_name)
+        node_span.end()
+        root.end()
 
         # Flush best-effort (não bloqueia o request se falhar)
         with suppress(Exception):
             client.flush()
 
-        host = self.settings.langfuse_host.rstrip("/")
-        # URL típica do Cloud; se self-hosted o path pode variar
-        trace_url = f"{host}/trace/{trace_id}"
+        trace_url = client.get_trace_url(trace_id=trace_id)
         return TurnTraceResult(trace_id=trace_id, trace_url=trace_url, enabled=True)
 
 
