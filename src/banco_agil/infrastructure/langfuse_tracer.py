@@ -146,44 +146,51 @@ class SessionTracer:
         atributos vão no nome do trace e na metadata (a v4 não expõe
         ``update_trace`` fora de context manager).
         """
+        from langfuse import propagate_attributes
+
         client = self._client
         assert client is not None
 
         active_agent = str(state.get("active_agent") or "unknown")
-        trace_id: str = client.create_trace_id()
-
-        root = client.start_observation(
-            trace_context={"trace_id": trace_id},
-            name=f"session_{session_id}",
-            as_type="span",
-            metadata={
-                "session_id": session_id,
-                "authenticated": bool(state.get("authenticated")),
-                "cpf_masked": cpf_masked,
-                "active_agent": active_agent,
-                "intent": state.get("intent"),
-            },
-        )
-
+        trace_name = f"session_{session_id}"
         span_name = f"agent:{active_agent}"
         if active_agent in {"guard", "router"}:
             span_name = f"node:{active_agent}"
-        node_span = client.start_observation(
-            trace_context={"trace_id": trace_id, "parent_span_id": root.id},
-            name=span_name,
-            as_type="span",
-            metadata={
-                "route_source": state.get("route_source"),
-                "route_confidence": state.get("route_confidence"),
-                "safety_label": state.get("safety_label"),
-                "safety_score": state.get("safety_score"),
-                "last_request_status": state.get("last_request_status"),
-            },
-        )
-        for event_name in events:
-            node_span.create_event(name=event_name)
-        node_span.end()
-        root.end()
+
+        # propagate_attributes define atributos de trace (session_id, nome) e os
+        # propaga aos spans filhos — habilita o agrupamento nativo por Sessions.
+        with (
+            propagate_attributes(
+                session_id=session_id,
+                trace_name=trace_name,
+                metadata={
+                    "authenticated": bool(state.get("authenticated")),
+                    "cpf_masked": cpf_masked,
+                    "intent": state.get("intent"),
+                },
+            ),
+            client.start_as_current_observation(
+                name=trace_name,
+                as_type="span",
+                metadata={"active_agent": active_agent},
+            ) as root,
+        ):
+            trace_id: str = root.trace_id
+            node_span = client.start_observation(
+                trace_context={"trace_id": trace_id, "parent_span_id": root.id},
+                name=span_name,
+                as_type="span",
+                metadata={
+                    "route_source": state.get("route_source"),
+                    "route_confidence": state.get("route_confidence"),
+                    "safety_label": state.get("safety_label"),
+                    "safety_score": state.get("safety_score"),
+                    "last_request_status": state.get("last_request_status"),
+                },
+            )
+            for event_name in events:
+                node_span.create_event(name=event_name)
+            node_span.end()
 
         # Flush best-effort (não bloqueia o request se falhar)
         with suppress(Exception):
