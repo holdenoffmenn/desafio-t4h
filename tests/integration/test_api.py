@@ -12,8 +12,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from banco_agil.config import Settings
 from banco_agil.deps import build_deps
 from banco_agil.graph.workflow import build_graph
+from banco_agil.infrastructure.langfuse_tracer import SessionTracer
 from banco_agil.infrastructure.session_checkpointer import build_checkpointer
 from banco_agil.main import create_app
 from banco_agil.utils.conversation import heuristic_intent
@@ -48,6 +50,8 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     async def test_lifespan(_application: FastAPI) -> AsyncGenerator[None, None]:
         app.state.deps = deps
         app.state.graph = graph
+        # Tracer no-op (sem chaves) — garante que ausência de Langfuse não quebra /chat
+        app.state.tracer = SessionTracer(settings=Settings(langfuse_public_key=""))
         yield
 
     app.router.lifespan_context = test_lifespan  # type: ignore[method-assign]
