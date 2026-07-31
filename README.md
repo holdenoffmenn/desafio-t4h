@@ -11,7 +11,7 @@ Sistema de atendimento bancário com agentes de IA especializados.
 |---|---|---|
 | 1 | Domain + CSV + ML classifiers | ✅ |
 | 2 | LangGraph (guard, triage, router, skills, CLI) | ✅ |
-| 3 | FastAPI + Streamlit | 🔲 |
+| 3 | FastAPI + Streamlit (Cliente + Backoffice) | ✅ |
 | 4 | Langfuse + Docker + README final | 🔲 |
 
 ## Setup rápido
@@ -37,7 +37,20 @@ pytest tests/unit tests/integration -v
 python -m banco_agil.cli
 ```
 
-Fluxo sugerido: autenticação → consulta limite → aumento (ex.: 6000) → rejeição → entrevista → câmbio → encerrar.
+## API + UI (Parte 3)
+
+```bash
+# terminal 1 — API
+uvicorn banco_agil.main:app --reload --port 8000
+
+# terminal 2 — Streamlit
+streamlit run src/banco_agil/ui/streamlit_app.py
+```
+
+- API docs: http://localhost:8000/docs  
+- UI: http://localhost:8501 (abas **Visão Cliente** e **Tech for Humans**)
+
+Fluxo sugerido: autenticação → consulta limite → `sim` → valor → (rejeição/aprovação) → câmbio → encerrar.
 
 ### Estrutura
 

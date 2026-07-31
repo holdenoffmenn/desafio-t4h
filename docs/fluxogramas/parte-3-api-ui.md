@@ -2,26 +2,34 @@
 
 > Status: 🟡 = rascunho da estratégia · ✅ = validado no código · 🔲 = pendente.
 > Referência de escopo: [`../../PROMPT-IMPLEMENTACAO.md`](../../PROMPT-IMPLEMENTACAO.md) (Parte 3).
+>
+> **Parte 3 implementada e validada** (`test_api` verde).
 
 ---
 
 ## API
 
-### `api.routes.chat.post_chat` (`POST /chat`) — 🟡
+### `api.routes.chat.chat` (`POST /chat`) — ✅
 
 ```mermaid
 flowchart TD
     A[POST /chat: session_id, message] --> V[validar ChatRequest]
-    V --> INV[graph.invoke<br/>config thread_id=session_id]
-    INV --> ERR{erro de domínio?}
-    ERR -- Sim --> T[traduzir p/ mensagem amigável<br/>sem stack trace]
-    ERR -- Não --> ST[ler estado resultante do checkpointer]
-    ST --> M[montar ChatMetadata:<br/>active_agent, intent, route, safety,<br/>tool_calls mascarados, score, trace_url]
-    M --> R[return ChatResponse]
+    V --> G{grafo pronto?}
+    G -- Não --> E503[HTTP 503]
+    G -- Sim --> ST[get_state thread_id]
+    ST --> NEW{sessão existe?}
+    NEW -- Não --> INIT[initial_state + HumanMessage]
+    NEW -- Sim --> MSG[apenas HumanMessage]
+    INIT --> INV[graph.invoke]
+    MSG --> INV
+    INV --> ERR{DomainError?}
+    ERR -- Sim --> T[mensagem amigável + metadata parcial]
+    ERR -- Não --> M[build_metadata + last_ai_text]
+    M --> R[ChatResponse 200]
     T --> R
 ```
 
-### Interação end-to-end (camadas) — 🟡
+### Interação end-to-end (camadas) — ✅
 
 ```mermaid
 sequenceDiagram
@@ -42,14 +50,14 @@ sequenceDiagram
 
 ## UI
 
-### `ui.streamlit_app` — ciclo de interação — 🟡
+### `ui.streamlit_app` — ciclo de interação — ✅
 
 ```mermaid
 flowchart TD
     A[carregar app] --> SID{session_id existe?}
     SID -- Não --> GEN[gerar uuid4 em st.session_state]
     SID -- Sim --> USE[reusar session_id]
-    GEN --> IN[input do usuário / botão Encerrar]
+    GEN --> IN[input / Encerrar / Nova sessão]
     USE --> IN
     IN --> CALL[httpx POST /chat]
     CALL --> HERR{erro HTTP?}
