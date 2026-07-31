@@ -39,8 +39,10 @@ def test_triage_waiting_for_input_ends_turn() -> None:
     assert route_after_triage(_state(authenticated=False, auth_attempts=1)) is END
 
 
-def test_triage_authenticated_goes_to_router() -> None:
-    assert route_after_triage(_state(authenticated=True)) == "router"
+def test_triage_authenticated_ends_turn_showing_menu() -> None:
+    # Autenticação recém-concluída: encerra o turno (mostra o menu da triagem);
+    # o roteamento por intenção ocorre no próximo turno via guard → router.
+    assert route_after_triage(_state(authenticated=True)) is END
 
 
 def test_router_intents() -> None:

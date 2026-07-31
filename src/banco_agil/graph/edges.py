@@ -9,7 +9,7 @@ from langgraph.graph import END
 from banco_agil.graph.state import SessionState
 
 AfterGuard = Literal["safe_reply", "triage", "router"]
-AfterTriage = Literal["end", "router"] | object
+AfterTriage = Literal["end"] | object
 AfterRouter = Literal["credit", "exchange", "interview", "end"] | object
 AfterCredit = Literal["interview", "end"] | object
 AfterInterview = Literal["credit", "end"] | object
@@ -35,22 +35,23 @@ def route_after_guard(state: SessionState) -> AfterGuard:
 def route_after_triage(state: SessionState) -> AfterTriage:
     """Roteia após a triagem/autenticação.
 
-    Encerra o turno com ``END`` quando ainda falta input do usuário.
-    Após 3 falhas de autenticação, vai para ``end``.
+    Sempre encerra o turno com ``END``: enquanto não autenticado, aguarda o
+    próximo dado (ou vai para ``end`` após 3 falhas); ao autenticar, exibe o
+    menu da triagem e aguarda a escolha. O credencial (CPF/data) nunca é
+    classificado como intenção — o roteamento por intenção ocorre no próximo
+    turno via ``guard → router``.
 
     Args:
         state: Estado atual da sessão.
 
     Returns:
-        Nome do próximo nó ou ``END``.
+        ``end`` (3 falhas) ou ``END`` (aguarda próxima mensagem).
     """
     if state.get("should_end"):
         return "end"
-    if not state.get("authenticated"):
-        if state.get("auth_attempts", 0) >= 3:
-            return "end"
-        return END
-    return "router"
+    if not state.get("authenticated") and state.get("auth_attempts", 0) >= 3:
+        return "end"
+    return END
 
 
 def route_after_router(state: SessionState) -> AfterRouter:
