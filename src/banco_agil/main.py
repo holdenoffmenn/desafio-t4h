@@ -10,9 +10,14 @@ from fastapi import FastAPI
 
 from banco_agil import __version__
 from banco_agil.api.routes import chat, health, session
+from banco_agil.config import get_settings
 from banco_agil.deps import build_deps
 from banco_agil.graph.workflow import build_graph
+from banco_agil.infrastructure.langfuse_tracer import build_tracer
+from banco_agil.observability.logging import configure_logging, get_logger
 from banco_agil.utils.conversation import heuristic_intent
+
+logger = get_logger(__name__)
 
 
 def _llm_fallback(text: str) -> str | None:
@@ -22,7 +27,7 @@ def _llm_fallback(text: str) -> str | None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Inicializa o grafo (singleton) no startup da API.
+    """Inicializa logging, tracer e grafo (singleton) no startup.
 
     Args:
         app: Instância FastAPI.
@@ -30,10 +35,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Yields:
         Controle ao servidor após o grafo pronto.
     """
-    deps = build_deps()
-    # FX mock por padrão em demo local se configurado
+    configure_logging(json_logs=True, force=True)
+    settings = get_settings()
+    deps = build_deps(settings)
     app.state.deps = deps
+    app.state.tracer = build_tracer(settings)
     app.state.graph = build_graph(deps, llm_fallback=_llm_fallback)
+    logger.info(
+        "api_started",
+        langfuse_enabled=app.state.tracer.enabled,
+        fx_mock=settings.fx_mock,
+    )
     yield
 
 

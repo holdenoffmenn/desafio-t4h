@@ -11,8 +11,10 @@ from banco_agil.api.metadata import build_metadata, build_reply
 from banco_agil.api.schemas import ChatRequest, ChatResponse
 from banco_agil.domain.errors import DomainError
 from banco_agil.graph.state import initial_state
+from banco_agil.observability.logging import get_logger
 
 router = APIRouter(tags=["chat"])
+logger = get_logger(__name__)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -21,6 +23,7 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 
     O estado de negócio é reconstruído pelo checkpointer via ``thread_id``.
     Erros de domínio viram mensagem amigável (sem stack trace).
+    Observabilidade (structlog + Langfuse) é best-effort e nunca derruba o chat.
 
     Args:
         payload: session_id + message.
@@ -36,6 +39,7 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     if graph is None:
         raise HTTPException(status_code=503, detail="Grafo não inicializado.")
 
+    tracer = getattr(request.app.state, "tracer", None)
     config: dict[str, Any] = {"configurable": {"thread_id": payload.session_id}}
     try:
         snapshot = graph.get_state(config)
@@ -47,6 +51,11 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 
         state = graph.invoke(invoke_payload, config=config)
     except DomainError as exc:
+        logger.warning(
+            "domain_error",
+            session_id=payload.session_id,
+            error=str(exc),
+        )
         return ChatResponse(
             reply=(
                 "Encontrei uma dificuldade ao processar sua solicitação. "
@@ -62,10 +71,26 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             ),
         )
     except Exception as exc:  # noqa: BLE001 — fronteira HTTP: nunca vazar stack
+        logger.error(
+            "chat_unhandled_error",
+            session_id=payload.session_id,
+            error=str(exc),
+        )
         raise HTTPException(
             status_code=500,
             detail="Erro interno ao processar o atendimento.",
         ) from exc
+
+    trace_url: str | None = None
+    if tracer is not None:
+        try:
+            result = tracer.record_turn(session_id=payload.session_id, state=state)
+            trace_url = result.trace_url
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("tracer_failed", error=str(exc), session_id=payload.session_id)
+
+    if trace_url:
+        state = {**state, "langfuse_trace_url": trace_url}
 
     return ChatResponse(
         reply=build_reply(
