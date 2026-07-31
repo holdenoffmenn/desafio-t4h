@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,12 +13,19 @@ from banco_agil.graph.workflow import build_graph, invoke_turn, last_ai_text
 from banco_agil.infrastructure.session_checkpointer import build_checkpointer
 
 
-def _build_env(tmp_path: Path, *, nlu: object | None = None) -> tuple[object, Path]:
+def _build_env(
+    tmp_path: Path,
+    *,
+    nlu: object | None = None,
+    llm_fallback: Callable[[str], str | None] | None = None,
+) -> tuple[object, Path]:
     """Monta data/models isolados e grafo com MemorySaver.
 
     Args:
         tmp_path: Diretório temporário do teste.
         nlu: Extrator LLM opcional injetado em ``deps.nlu``.
+        llm_fallback: Classificador de intenção opcional (LLM). Quando ``None``,
+            usa um stub que nunca decide (força semântico/heurística).
 
     Returns:
         Par ``(graph, data_dir)``.
@@ -44,7 +52,7 @@ def _build_env(tmp_path: Path, *, nlu: object | None = None) -> tuple[object, Pa
     graph = build_graph(
         deps,
         checkpointer=build_checkpointer(memory=True),
-        llm_fallback=lambda text: None,
+        llm_fallback=llm_fallback or (lambda text: None),
     )
     return graph, data_dir
 
@@ -292,6 +300,94 @@ def test_exchange_mock(graph_env: tuple[object, Path]) -> None:
     state = invoke_turn(graph, session_id=sid, message="qual a cotação do dólar?")
     assert state["active_agent"] == "exchange"
     assert "cotação" in last_ai_text(state).lower() or "USD" in last_ai_text(state)
+
+
+def test_credit_understands_partial_scale_value(graph_env: tuple[object, Path]) -> None:
+    """"25 mil reais" deve virar 25000 (e não R$ 25), mesmo sem LLM.
+
+    Regressão do bug do R$ 25,00: a heurística capturava só o "25" antes de
+    "mil". Agora a rede de segurança entende o multiplicador parcial.
+    """
+    graph, _ = graph_env
+    sid = "sess-scale"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+
+    invoke_turn(graph, session_id=sid, message="limite de crédito")
+    state = invoke_turn(graph, session_id=sid, message="queria passar para 25 mil reais")
+
+    assert state["pending_new_limit"] == 25000.0
+    assert "25.000" in last_ai_text(state)
+
+
+def test_credit_reasks_then_errors_on_unparseable_value(
+    graph_env: tuple[object, Path],
+) -> None:
+    """Valor não interpretável: re-pergunta 1x amigável e depois erro curto."""
+    graph, _ = graph_env
+    sid = "sess-reask-limit"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+    invoke_turn(graph, session_id=sid, message="limite")
+    invoke_turn(graph, session_id=sid, message="sim")  # → aguarda valor
+
+    r1 = invoke_turn(graph, session_id=sid, message="sei lá")
+    assert r1["awaiting_limit_value"] is True
+    assert r1["clarify_attempts"] == 1
+    assert "desculpe" in last_ai_text(r1).lower()
+
+    r2 = invoke_turn(graph, session_id=sid, message="não faço ideia")
+    assert r2["clarify_attempts"] == 2
+    assert "apenas o número" in last_ai_text(r2).lower()
+
+    # Um valor válido depois disso conclui e zera o contador.
+    ok = invoke_turn(graph, session_id=sid, message="4000")
+    assert ok["last_request_status"] == "aprovado"
+    assert ok["clarify_attempts"] == 0
+
+
+def test_interview_reasks_then_errors_on_unparseable_field(
+    graph_env: tuple[object, Path],
+) -> None:
+    """Campo da entrevista não interpretável: re-pergunta 1x e depois erro."""
+    graph, _ = graph_env
+    sid = "sess-reask-field"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+    invoke_turn(graph, session_id=sid, message="aumentar limite para 7000")
+    invoke_turn(graph, session_id=sid, message="sim")  # → pergunta renda
+
+    r1 = invoke_turn(graph, session_id=sid, message="sei lá")
+    assert r1["clarify_attempts"] == 1
+    assert "desculpe, não entendi" in last_ai_text(r1).lower()
+
+    r2 = invoke_turn(graph, session_id=sid, message="não sei dizer")
+    assert r2["clarify_attempts"] == 2
+    assert "apenas o valor" in last_ai_text(r2).lower()
+
+    # Resposta válida destrava o campo e zera o contador.
+    ok = invoke_turn(graph, session_id=sid, message="15000")
+    assert ok["clarify_attempts"] == 0
+    assert "emprego" in last_ai_text(ok).lower()
+
+
+def test_llm_is_primary_intent_router(tmp_path: Path) -> None:
+    """Com LLM configurada, ela é a intérprete primária da intenção.
+
+    Mesmo que o semântico pudesse sugerir crédito, a decisão da LLM prevalece.
+    """
+    graph, _ = _build_env(tmp_path, llm_fallback=lambda text: "exchange")
+    sid = "sess-llm-primary"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+
+    state = invoke_turn(graph, session_id=sid, message="quero saber meu limite")
+    assert state["active_agent"] == "exchange"
+    assert state["route_source"] == "llm_fallback"
 
 
 def test_increase_flow_sim_then_value(graph_env: tuple[object, Path]) -> None:

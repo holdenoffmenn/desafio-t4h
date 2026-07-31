@@ -4,6 +4,7 @@ from datetime import date
 
 import pytest
 
+from banco_agil.utils.conversation import extract_money
 from banco_agil.utils.cpf import is_valid_cpf, normalize_cpf
 from banco_agil.utils.currency import normalize_brazilian_currency
 from banco_agil.utils.dates import parse_flexible_date
@@ -36,6 +37,21 @@ def test_normalize_brazilian_currency_formats() -> None:
 def test_normalize_brazilian_currency_invalid() -> None:
     with pytest.raises(ValueError):
         normalize_brazilian_currency("abc")
+
+
+def test_extract_money_plain_and_formatted() -> None:
+    assert extract_money("quero 30000") == 30000.0
+    assert extract_money("R$ 3.000,00") == 3000.0
+    assert extract_money("sem valor aqui") is None
+
+
+def test_extract_money_partial_scale_words() -> None:
+    # Regressão: "25 mil" era lido como 25 (bug do R$ 25,00).
+    assert extract_money("queria passar para 25 mil reais") == 25000.0
+    assert extract_money("2,5 mil") == 2500.0
+    assert extract_money("aumentar para 3 milhões") == 3_000_000.0
+    # Por extenso completo continua a cargo do interpretador LLM.
+    assert extract_money("sete mil") is None
 
 
 def test_parse_flexible_date_formats() -> None:

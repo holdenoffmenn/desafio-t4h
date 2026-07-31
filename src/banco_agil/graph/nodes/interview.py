@@ -50,6 +50,7 @@ def make_interview_node(deps: AppDeps):
         first_entry = state.get("interview_data") is None
         data: dict[str, object] = dict(state.get("interview_data") or {})
 
+        failed_field: str | None = None
         if not first_entry:
             # O campo perguntado no turno anterior é o primeiro pendente.
             target = next((field for field in _FIELDS if field not in data), None)
@@ -57,15 +58,26 @@ def make_interview_node(deps: AppDeps):
                 value = _interpret_field(target, text, deps.nlu)
                 if value is not None:
                     data[target] = value
+                else:
+                    failed_field = target
 
         missing = [field for field in _FIELDS if field not in data]
         if missing:
-            question = _question_for(missing[0])
+            # Se não interpretamos a resposta do campo perguntado, re-pergunta
+            # 1x de forma amigável e, se persistir, mostra um erro curto com o
+            # formato esperado. Do contrário, seguimos para o próximo campo.
+            if failed_field is not None and failed_field == missing[0]:
+                attempts = int(state.get("clarify_attempts", 0)) + 1
+                question = _reask_field(missing[0], attempts)
+            else:
+                attempts = 0
+                question = _question_for(missing[0])
             return {
                 "active_agent": "interview",
                 "interview_data": data,
                 "interview_complete": False,
                 "awaiting_interview": True,
+                "clarify_attempts": attempts,
                 "messages": [AIMessage(content=question)],
             }
 
@@ -77,6 +89,7 @@ def make_interview_node(deps: AppDeps):
                 "interview_data": data,
                 "interview_complete": False,
                 "awaiting_interview": True,
+                "clarify_attempts": 0,
                 "messages": [
                     AIMessage(
                         content=(
@@ -101,6 +114,7 @@ def make_interview_node(deps: AppDeps):
         new_score = update["last_score_calculation"]["score_after"]  # type: ignore[index]
         update["active_agent"] = "interview"
         update["awaiting_interview"] = False
+        update["clarify_attempts"] = 0
         update["messages"] = [
             AIMessage(
                 content=(
@@ -235,3 +249,28 @@ def _question_for(field: str) -> str:
         "tem_dividas": "Você possui dívidas ativas? (sim ou não)",
     }
     return questions[field]
+
+
+_FORMAT_HINT: dict[str, str] = {
+    "renda_mensal": "Informe apenas o valor em reais, por exemplo: 5000.",
+    "tipo_emprego": "Responda formal, autônomo ou desempregado.",
+    "despesas_fixas": "Informe apenas o valor em reais, por exemplo: 1500.",
+    "num_dependentes": "Informe um número inteiro, por exemplo: 0, 1, 2.",
+    "tem_dividas": "Responda apenas sim ou não.",
+}
+
+
+def _reask_field(field: str, attempts: int) -> str:
+    """Re-pergunta o campo (1x amigável) e, se persistir, reforça o formato.
+
+    Args:
+        field: Campo pendente não interpretado.
+        attempts: Nº de tentativas malsucedidas para este campo.
+
+    Returns:
+        Texto da pergunta ajustado ao nº de tentativas.
+    """
+    question = _question_for(field)
+    if attempts <= 1:
+        return f"Desculpe, não entendi. {question}"
+    return f"Ainda não consegui entender. {question} {_FORMAT_HINT[field]}"

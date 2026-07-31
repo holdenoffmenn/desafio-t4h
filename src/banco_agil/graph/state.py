@@ -63,6 +63,9 @@ class SessionState(TypedDict):
     interview_complete: bool
     awaiting_interview: bool
 
+    # Clarificação (re-pergunta 1x → erro) na coleta de valores/campos
+    clarify_attempts: int
+
     # Controle
     should_end: bool
     error: str | None
@@ -106,6 +109,7 @@ def initial_state(session_id: str = "") -> SessionState:
         "interview_data": None,
         "interview_complete": False,
         "awaiting_interview": False,
+        "clarify_attempts": 0,
         "should_end": False,
         "error": None,
         "last_tool_calls": [],

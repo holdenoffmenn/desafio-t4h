@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import AIMessage
 
 from banco_agil.deps import AppDeps
 from banco_agil.domain.models import Customer
 from banco_agil.graph.state import SessionState
+
+if TYPE_CHECKING:
+    from banco_agil.llm.extract import LlmExtractor
 from banco_agil.tools.credit_tools import (
     get_credit_limit_update,
     offer_credit_interview_update,
@@ -85,6 +88,7 @@ def make_credit_node(deps: AppDeps):
                 "interview_accepted": False,
                 "awaiting_increase_confirm": False,
                 "awaiting_limit_value": False,
+                "clarify_attempts": 0,
                 "messages": [
                     AIMessage(
                         content=(
@@ -95,18 +99,16 @@ def make_credit_node(deps: AppDeps):
                 ],
             }
 
-        new_limit = extract_money(text)
         awaiting_value = bool(state.get("awaiting_limit_value"))
         awaiting_confirm = bool(state.get("awaiting_increase_confirm"))
-
-        # Fallback LLM: interpreta o valor em linguagem natural ("sete mil")
-        # quando estamos aguardando um limite e a heurística não capturou.
-        if (
-            new_limit is None
-            and deps.nlu is not None
-            and (awaiting_value or awaiting_confirm or wants_credit_increase(text))
-        ):
-            new_limit = deps.nlu.money(text, field="limite_credito")
+        wants_increase = wants_credit_increase(text)
+        value_context = (
+            awaiting_value
+            or awaiting_confirm
+            or wants_increase
+            or state.get("pending_new_limit") is not None
+        )
+        new_limit = _interpret_limit(text, deps.nlu, value_context=value_context)
 
         # Usuário recusou iniciar o aumento
         if awaiting_confirm and looks_like_negative(text):
@@ -114,6 +116,7 @@ def make_credit_node(deps: AppDeps):
                 "active_agent": "credit",
                 "awaiting_increase_confirm": False,
                 "awaiting_limit_value": False,
+                "clarify_attempts": 0,
                 "messages": [
                     AIMessage(
                         content=(
@@ -133,13 +136,20 @@ def make_credit_node(deps: AppDeps):
         if new_limit is not None and (
             awaiting_value
             or awaiting_confirm
-            or wants_credit_increase(text)
+            or wants_increase
             or state.get("pending_new_limit") is not None
         ):
             return _process_increase(deps, state, customer, new_limit, reanalysis=False)
 
-        # Pedido de aumento sem valor
-        if wants_credit_increase(text) or (awaiting_value and new_limit is None):
+        # Aguardávamos um valor e não conseguimos interpretá-lo: re-pergunta 1x
+        # de forma amigável e, se persistir, mostra um erro curto (sem inventar
+        # nem assumir valores).
+        if awaiting_value and new_limit is None:
+            attempts = int(state.get("clarify_attempts", 0)) + 1
+            return _reask_limit_value(customer, attempts)
+
+        # Pedido de aumento sem valor → primeira pergunta do valor
+        if wants_increase:
             return _ask_for_limit_value(customer)
 
         # Default: consulta + oferece aumento (abre contexto para "sim")
@@ -149,6 +159,7 @@ def make_credit_node(deps: AppDeps):
             **obs,
             "awaiting_increase_confirm": True,
             "awaiting_limit_value": False,
+            "clarify_attempts": 0,
             "messages": [
                 AIMessage(
                     content=(
@@ -164,6 +175,34 @@ def make_credit_node(deps: AppDeps):
     return credit_node
 
 
+def _interpret_limit(
+    text: str,
+    nlu: LlmExtractor | None,
+    *,
+    value_context: bool,
+) -> float | None:
+    """Interpreta o novo limite (LLM primeiro, heurística como rede de segurança).
+
+    Quando o contexto espera um valor e há LLM configurado, ela interpreta a
+    resposta em linguagem natural (ex.: "vinte e cinco mil" → ``25000``). A
+    heurística determinística só é usada como fallback (LLM ausente ou incapaz
+    de interpretar), preservando a degradação graciosa.
+
+    Args:
+        text: Mensagem do usuário.
+        nlu: Extrator LLM opcional.
+        value_context: ``True`` quando o turno espera um valor de limite.
+
+    Returns:
+        Valor em reais ou ``None`` se não interpretável.
+    """
+    if value_context and nlu is not None:
+        value = nlu.money(text, field="limite_credito")
+        if value is not None:
+            return value
+    return extract_money(text)
+
+
 def _ask_for_limit_value(customer: Customer) -> dict[str, Any]:
     """Pede o novo limite e marca o estado de espera do valor."""
     obs = get_credit_limit_update(customer)
@@ -172,6 +211,7 @@ def _ask_for_limit_value(customer: Customer) -> dict[str, Any]:
         **obs,
         "awaiting_increase_confirm": False,
         "awaiting_limit_value": True,
+        "clarify_attempts": 0,
         "messages": [
             AIMessage(
                 content=(
@@ -181,6 +221,37 @@ def _ask_for_limit_value(customer: Customer) -> dict[str, Any]:
                 )
             )
         ],
+    }
+
+
+def _reask_limit_value(customer: Customer, attempts: int) -> dict[str, Any]:
+    """Re-pergunta o valor (1x amigável) e, se persistir, mostra erro curto.
+
+    Args:
+        customer: Cliente autenticado (para manter o contexto do limite atual).
+        attempts: Nº de tentativas malsucedidas de interpretar o valor.
+
+    Returns:
+        Update mantendo ``awaiting_limit_value`` e o contador de tentativas.
+    """
+    obs = get_credit_limit_update(customer)
+    if attempts <= 1:
+        message = (
+            "Desculpe, não consegui identificar o valor. Qual novo limite você "
+            "gostaria de solicitar, em reais? (por exemplo: 30000)"
+        )
+    else:
+        message = (
+            "Ainda não entendi o valor. Envie apenas o número, sem outras "
+            "palavras — por exemplo: 30000."
+        )
+    return {
+        "active_agent": "credit",
+        **obs,
+        "awaiting_increase_confirm": False,
+        "awaiting_limit_value": True,
+        "clarify_attempts": attempts,
+        "messages": [AIMessage(content=message)],
     }
 
 
@@ -205,6 +276,7 @@ def _process_increase(
     update["pending_new_limit"] = new_limit
     update["awaiting_increase_confirm"] = False
     update["awaiting_limit_value"] = False
+    update["clarify_attempts"] = 0
 
     status = update["last_request_status"]
     if status == "aprovado":

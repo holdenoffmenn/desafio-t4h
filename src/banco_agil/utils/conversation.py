@@ -13,6 +13,12 @@ from banco_agil.utils.dates import parse_flexible_date
 _CPF_RE = re.compile(r"\b(\d{3}\.?\d{3}\.?\d{3}-?\d{2})\b")
 _DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}|\d{2}-\d{2}-\d{4}|\d{8})\b")
 _NUMBER_RE = re.compile(r"(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:[.,]\d+)?)")
+# "25 mil", "2,5 mil", "3 milhões": multiplicador por extenso parcial. A
+# alternativa de "milhão" vem antes de "mil" para não casar só o prefixo.
+_SCALE_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(milh[ãa]o|milh[õo]es|mil)\b",
+    re.IGNORECASE,
+)
 
 
 def last_user_text(messages: Sequence[Any]) -> str:
@@ -66,12 +72,27 @@ def extract_date(text: str) -> date | None:
 def extract_money(text: str) -> float | None:
     """Extrai o primeiro valor monetário do texto.
 
+    Reconhece multiplicadores parciais por extenso (``"25 mil"`` → ``25000``,
+    ``"3 milhões"`` → ``3000000``). Valores totalmente por extenso (``"sete
+    mil"``) ficam a cargo do interpretador LLM; aqui é apenas a rede de
+    segurança determinística.
+
     Args:
         text: Mensagem do usuário.
 
     Returns:
         Float em reais ou None.
     """
+    scaled = _SCALE_RE.search(text)
+    if scaled is not None:
+        try:
+            base = normalize_brazilian_currency(scaled.group(1))
+        except (ValueError, TypeError):
+            base = None
+        if base is not None:
+            multiplier = 1_000_000 if scaled.group(2).lower().startswith("milh") else 1_000
+            return base * multiplier
+
     match = _NUMBER_RE.search(text)
     if not match:
         return None
