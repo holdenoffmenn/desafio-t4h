@@ -10,34 +10,25 @@ from langchain_core.messages import HumanMessage
 from banco_agil.deps import build_deps
 from banco_agil.graph.state import initial_state
 from banco_agil.graph.workflow import build_graph, last_ai_text
-
-
-def _fake_llm_fallback(text: str) -> str | None:
-    """Fallback determinístico usado quando o roteador semântico falha.
-
-    Args:
-        text: Mensagem do usuário.
-
-    Returns:
-        Intent ou None.
-    """
-    from banco_agil.utils.conversation import heuristic_intent
-
-    return heuristic_intent(text)
+from banco_agil.llm import build_chat_model, make_llm_intent_fallback
 
 
 def run_cli() -> None:
     """Loop interativo no terminal para validar o grafo.
+
+    Usa o LLM configurado no ``.env`` como fallback de intenção quando
+    disponível; caso contrário, opera com roteamento semântico + heurística.
 
     Controles:
         ``/sair`` — encerra o CLI
         ``/novo`` — reinicia a sessão
     """
     deps = build_deps()
+    llm_fallback = make_llm_intent_fallback(build_chat_model(deps.settings))
     graph = build_graph(
         deps,
         use_memory_checkpointer=False,
-        llm_fallback=_fake_llm_fallback,
+        llm_fallback=llm_fallback,
     )
     session_id = str(uuid.uuid4())
     print("Banco Ágil — CLI (Parte 2). Digite /sair para encerrar, /novo para nova sessão.")

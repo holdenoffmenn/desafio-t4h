@@ -14,20 +14,15 @@ from banco_agil.config import get_settings
 from banco_agil.deps import build_deps
 from banco_agil.graph.workflow import build_graph
 from banco_agil.infrastructure.langfuse_tracer import build_tracer
+from banco_agil.llm import build_chat_model, make_llm_intent_fallback
 from banco_agil.observability.logging import configure_logging, get_logger
-from banco_agil.utils.conversation import heuristic_intent
 
 logger = get_logger(__name__)
 
 
-def _llm_fallback(text: str) -> str | None:
-    """Fallback determinístico de intenção (sem LLM real)."""
-    return heuristic_intent(text)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Inicializa logging, tracer e grafo (singleton) no startup.
+    """Inicializa logging, tracer, LLM e grafo (singleton) no startup.
 
     Args:
         app: Instância FastAPI.
@@ -38,13 +33,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_logging(json_logs=True, force=True)
     settings = get_settings()
     deps = build_deps(settings)
+    chat_model = build_chat_model(settings)
+    llm_fallback = make_llm_intent_fallback(chat_model)
     app.state.deps = deps
     app.state.tracer = build_tracer(settings)
-    app.state.graph = build_graph(deps, llm_fallback=_llm_fallback)
+    app.state.graph = build_graph(deps, llm_fallback=llm_fallback)
     logger.info(
         "api_started",
         langfuse_enabled=app.state.tracer.enabled,
         fx_mock=settings.fx_mock,
+        llm_enabled=chat_model is not None,
+        llm_provider=settings.llm_provider,
     )
     yield
 

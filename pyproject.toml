@@ -19,6 +19,7 @@ dependencies = [
     "structlog>=24.1",
     "python-dotenv>=1.0",
     "langchain-core>=0.3",
+    "langchain>=0.3",
     "langgraph>=0.2",
     "langgraph-checkpoint-sqlite>=2.0",
     "fastapi>=0.115",
@@ -32,6 +33,26 @@ embeddings = [
 ]
 observability = [
     "langfuse>=2.60",
+]
+# Provedores de LLM — instale apenas o(s) que for usar (LLM_PROVIDER no .env).
+llm-gemini = [
+    "langchain-google-genai>=2.0",
+]
+llm-groq = [
+    "langchain-groq>=0.2",
+]
+# langchain-openai cobre tanto OpenAI quanto OpenRouter (endpoint compatível).
+llm-openai = [
+    "langchain-openai>=0.2",
+]
+llm-together = [
+    "langchain-together>=0.3",
+]
+llm-all = [
+    "langchain-google-genai>=2.0",
+    "langchain-groq>=0.2",
+    "langchain-openai>=0.2",
+    "langchain-together>=0.3",
 ]
 dev = [
     "pytest>=8.2",

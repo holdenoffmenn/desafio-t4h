@@ -11,9 +11,16 @@ class Settings(BaseSettings):
     """Configurações tipadas carregadas de `.env` e do ambiente.
 
     Attributes:
-        llm_provider: Provedor de LLM (`groq`, `gemini`, etc.).
+        llm_provider: Provedor de LLM (`gemini`, `groq`, `openai`,
+            `together`, `openrouter` ou `none`/`fake` para desligar).
+        llm_model: Nome do modelo no provedor escolhido.
+        llm_temperature: Temperatura de amostragem (0 = determinístico).
         groq_api_key: Chave da API Groq (opcional na Parte 1).
-        gemini_api_key: Chave da API Gemini (opcional).
+        gemini_api_key: Chave da API Gemini / Google AI Studio (opcional).
+        openai_api_key: Chave da API OpenAI (opcional).
+        together_api_key: Chave da API TogetherAI (opcional).
+        openrouter_api_key: Chave da API OpenRouter (opcional).
+        openrouter_base_url: Endpoint OpenAI-compatível do OpenRouter.
         langfuse_public_key: Chave pública Langfuse.
         langfuse_secret_key: Chave secreta Langfuse.
         langfuse_host: Host do Langfuse Cloud/self-hosted.
@@ -35,9 +42,15 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    llm_provider: str = "groq"
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-flash-latest"
+    llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     groq_api_key: str = ""
     gemini_api_key: str = ""
+    openai_api_key: str = ""
+    together_api_key: str = ""
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
