@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.pyc
+
+# Env / secrets
+.env
+.env.local
+*.pem
+
+# Runtime data (keep seeds; ignore generated/session)
+data/solicitacoes_aumento_limite.csv
+data/sessions.sqlite
+data/*.sqlite
+data/*.lock
+models/*.joblib
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+requirements
