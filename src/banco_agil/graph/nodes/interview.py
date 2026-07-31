@@ -43,9 +43,13 @@ def make_interview_node(deps: AppDeps):
             Update parcial; com dados completos chama ScoringService.
         """
         text = last_user_text(state.get("messages", []))
+        # Primeira entrada: a mensagem é o aceite ("sim") — não deve ser
+        # interpretada como resposta de campo (senão "sim" viraria tem_dividas).
+        first_entry = state.get("interview_data") is None
         data: dict[str, object] = dict(state.get("interview_data") or {})
 
-        _merge_from_text(data, text)
+        if not first_entry:
+            _merge_from_text(data, text)
 
         missing = [field for field in _FIELDS if field not in data]
         if missing:
@@ -54,6 +58,7 @@ def make_interview_node(deps: AppDeps):
                 "active_agent": "interview",
                 "interview_data": data,
                 "interview_complete": False,
+                "awaiting_interview": True,
                 "messages": [AIMessage(content=question)],
             }
 
@@ -64,6 +69,7 @@ def make_interview_node(deps: AppDeps):
                 "active_agent": "interview",
                 "interview_data": data,
                 "interview_complete": False,
+                "awaiting_interview": True,
                 "messages": [
                     AIMessage(
                         content=(
@@ -87,6 +93,7 @@ def make_interview_node(deps: AppDeps):
         )
         new_score = update["last_score_calculation"]["score_after"]  # type: ignore[index]
         update["active_agent"] = "interview"
+        update["awaiting_interview"] = False
         update["messages"] = [
             AIMessage(
                 content=(
@@ -127,12 +134,17 @@ def _merge_from_text(data: dict[str, object], text: str) -> None:
         if digits:
             data["num_dependentes"] = int(digits)
             return
+        if any(w in lowered for w in ("nenhum", "zero", "não tenho", "nao tenho")):
+            data["num_dependentes"] = 0
+            return
 
     if "tem_dividas" not in data:
-        if any(w in lowered for w in ("sim", "tenho", "possuo")):
-            data["tem_dividas"] = "sim"
-        elif any(w in lowered for w in ("não", "nao", "nenhuma")):
+        # Negação é checada antes de "sim" para evitar falsos positivos
+        # em frases como "não, não tenho dívidas".
+        if any(w in lowered for w in ("não", "nao", "nenhuma", "sem", "zero", "quito")):
             data["tem_dividas"] = "não"
+        elif any(w in lowered for w in ("sim", "tenho", "possuo", "devo", "com dívida")):
+            data["tem_dividas"] = "sim"
 
 
 def _parse_emprego(text: str) -> Emprego | None:

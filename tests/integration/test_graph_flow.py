@@ -108,6 +108,40 @@ def test_credit_reject_offers_interview(graph_env: tuple[object, Path]) -> None:
     assert (data_dir / "solicitacoes_aumento_limite.csv").exists()
 
 
+def test_full_interview_flow_updates_score_and_reanalyzes(
+    graph_env: tuple[object, Path],
+) -> None:
+    """Entrevista multi-turno: coleta campo a campo, recalcula score e reanalisa.
+
+    Regressão do bug de continuidade: respostas de campo eram roteadas para
+    intenção desconhecida e a entrevista nunca completava.
+    """
+    graph, _ = graph_env
+    sid = "sess-interview"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+
+    # Ana score 450 → max 5000; pedir 6000 → rejeitado, oferece entrevista
+    rej = invoke_turn(graph, session_id=sid, message="quero aumentar meu limite para 6000")
+    assert rej["last_request_status"] == "rejeitado"
+    assert rej["offered_interview"] is True
+
+    assert "renda" in last_ai_text(invoke_turn(graph, session_id=sid, message="sim")).lower()
+    invoke_turn(graph, session_id=sid, message="8000")  # renda
+    invoke_turn(graph, session_id=sid, message="formal")  # emprego
+    invoke_turn(graph, session_id=sid, message="1000")  # despesas
+    invoke_turn(graph, session_id=sid, message="0")  # dependentes
+    final = invoke_turn(graph, session_id=sid, message="não")  # dívidas → completa
+
+    calc = final["last_score_calculation"]
+    assert calc is not None
+    assert calc["score_after"] == 739
+    # score 739 → faixa 600-799 (max 15000); 6000 aprovado na reanálise
+    assert final["last_request_status"] == "aprovado"
+    assert "aprovad" in last_ai_text(final).lower()
+
+
 def test_safety_blocks_injection(graph_env: tuple[object, Path]) -> None:
     graph, _ = graph_env
     sid = "sess-safe"

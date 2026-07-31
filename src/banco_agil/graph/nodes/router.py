@@ -61,6 +61,17 @@ def make_router_node(
             )
             return update
 
+        # Entrevista em andamento: mantém o cliente no fluxo até completar.
+        # Sem esta guarda, respostas como "8000" ou "formal" cairiam em intent
+        # desconhecida e a entrevista nunca seria concluída (bug de continuidade).
+        if state.get("awaiting_interview") and not state.get("interview_complete"):
+            return {
+                "active_agent": "router",
+                "intent": "interview",
+                "route_source": "heuristic",
+                "route_confidence": 1.0,
+            }
+
         # Continuação do fluxo de aumento de limite (contexto entre turnos)
         if state.get("awaiting_limit_value") or (
             state.get("awaiting_increase_confirm")

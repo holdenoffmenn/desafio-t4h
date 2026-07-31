@@ -61,6 +61,7 @@ class SessionState(TypedDict):
     # Entrevista
     interview_data: dict[str, object] | None
     interview_complete: bool
+    awaiting_interview: bool
 
     # Controle
     should_end: bool
@@ -104,6 +105,7 @@ def initial_state(session_id: str = "") -> SessionState:
         "awaiting_limit_value": False,
         "interview_data": None,
         "interview_complete": False,
+        "awaiting_interview": False,
         "should_end": False,
         "error": None,
         "last_tool_calls": [],
