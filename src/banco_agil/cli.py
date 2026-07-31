@@ -10,7 +10,12 @@ from langchain_core.messages import HumanMessage
 from banco_agil.deps import build_deps
 from banco_agil.graph.state import initial_state
 from banco_agil.graph.workflow import build_graph, last_ai_text
-from banco_agil.llm import build_chat_model, make_llm_extractor, make_llm_intent_fallback
+from banco_agil.llm import (
+    build_chat_model,
+    make_llm_extractor,
+    make_llm_intent_fallback,
+    make_llm_responder,
+)
 
 
 def run_cli() -> None:
@@ -27,6 +32,7 @@ def run_cli() -> None:
     chat_model = build_chat_model(deps.settings)
     llm_fallback = make_llm_intent_fallback(chat_model)
     deps.nlu = make_llm_extractor(chat_model)
+    responder = make_llm_responder(chat_model)
     graph = build_graph(
         deps,
         use_memory_checkpointer=False,
@@ -66,6 +72,8 @@ def run_cli() -> None:
         state = graph.invoke(payload, config=config)
         reply = last_ai_text(state)
         agent = state.get("active_agent")
+        if responder is not None and agent != "safe_reply":
+            reply = responder.humanize(reply)
         print(f"agente[{agent}]> {reply}\n")
 
         if state.get("should_end"):
