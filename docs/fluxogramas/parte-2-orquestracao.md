@@ -2,12 +2,14 @@
 
 > Status: 🟡 = rascunho da estratégia · ✅ = validado no código · 🔲 = pendente.
 > Referência de escopo: [`../../PROMPT-IMPLEMENTACAO.md`](../../PROMPT-IMPLEMENTACAO.md) (Parte 2).
+>
+> **Parte 2 implementada e validada** (`test_routing` + `test_graph_flow` verdes).
 
 ---
 
 ## Topologia geral
 
-### `graph.workflow.build_graph` — 🟡
+### `graph.workflow.build_graph` — ✅
 
 ```mermaid
 flowchart TD
@@ -27,18 +29,22 @@ flowchart TD
     rr -- end --> end
     rr -- incerto --> END
     credit --> rc{route_after_credit}
-    rc -- rejeitado + aceite --> interview
-    rc -- senão --> router
-    interview --> router
-    exchange --> router
+    rc -- interview_accepted --> interview
+    rc -- senão --> END
+    interview --> ri{route_after_interview}
+    ri -- complete --> credit
+    ri -- incompleta --> END
+    exchange --> END
     end --> END
 ```
+
+> **Nota:** skills encerram o **turno** com `END`. O hub (`router`) é retomado no próximo `invoke` (`guard → router`), evitando loop no mesmo tick.
 
 ---
 
 ## Funções de roteamento (edges — puras)
 
-### `graph.edges.route_after_guard` — 🟡
+### `graph.edges.route_after_guard` — ✅
 
 ```mermaid
 flowchart TD
@@ -49,7 +55,7 @@ flowchart TD
     C -- Sim --> R[router]
 ```
 
-### `graph.edges.route_after_triage` — 🟡
+### `graph.edges.route_after_triage` — ✅
 
 ```mermaid
 flowchart TD
@@ -62,7 +68,7 @@ flowchart TD
     AT -- Não --> W[END<br/>encerra turno, aguarda input]
 ```
 
-### `graph.edges.route_after_router` — 🟡
+### `graph.edges.route_after_router` — ✅
 
 ```mermaid
 flowchart TD
@@ -76,29 +82,31 @@ flowchart TD
     I -- unknown --> W[END<br/>clarificar no próximo turno]
 ```
 
-### `graph.edges.route_after_credit` — 🟡
+### `graph.edges.route_after_credit` — ✅
 
 ```mermaid
 flowchart TD
     A[state] --> E{should_end?}
     E -- Sim --> N[end]
-    E -- Não --> J{last_request_status == rejeitado<br/>E offered_interview?}
+    E -- Não --> J{interview_accepted?}
     J -- Sim --> V[interview]
-    J -- Não --> R[router]
+    J -- Não --> W[END]
 ```
 
-### `graph.edges.route_after_interview` — 🟡
+### `graph.edges.route_after_interview` — ✅
 
 ```mermaid
 flowchart TD
-    A[state] --> R[router<br/>reanálise com score atualizado]
+    A[state] --> C{interview_complete?}
+    C -- Sim --> CR[credit<br/>reanálise]
+    C -- Não --> W[END]
 ```
 
 ---
 
 ## Nós com ramificação
 
-### `graph.nodes.guard` — 🟡
+### `graph.nodes.guard` — ✅
 
 ```mermaid
 flowchart TD
@@ -110,38 +118,51 @@ flowchart TD
     B -- Não --> PASS
 ```
 
-### `graph.nodes.triage` — 🔲
+### `graph.nodes.triage` — ✅
 
 ```mermaid
 flowchart TD
-    A[nó triage] --> TODO[a detalhar na implementação:<br/>coleta CPF/data multi-turno,<br/>authenticate_customer,<br/>incremento de auth_attempts só em par completo]
+    A[nó triage] --> ENDQ{pedido de fim?}
+    ENDQ -- Sim --> E[should_end]
+    ENDQ -- Não --> CPF{tem CPF?}
+    CPF -- Não --> P1[pedir CPF]
+    CPF -- Sim --> DT{tem data?}
+    DT -- Não --> P2[pedir data nascimento]
+    DT -- Sim --> AUTH[authenticate_customer]
+    AUTH --> OK{ok?}
+    OK -- Sim --> R[authenticated + saudação]
+    OK -- Não --> ATT[auth_attempts += 1]
 ```
 
-### `graph.nodes.router` — 🟡
+### `graph.nodes.router` — ✅
 
 ```mermaid
 flowchart TD
-    A[nó router] --> S[SemanticIntentRouter.predict]
+    A[nó router] --> AFF{oferta entrevista + sim?}
+    AFF -- Sim --> IV[intent=interview]
+    AFF -- Não --> S[SemanticIntentRouter.predict]
     S --> R{resultado?}
-    R -- RouteResult --> SET1[intent, route_confidence,<br/>route_source=semantic]
-    R -- None --> L[identify_intent via LLM]
-    L --> SET2[intent, route_source=llm_fallback]
+    R -- RouteResult --> SET1[intent semantic]
+    R -- None --> H[heuristic_intent]
+    H --> L{achou?}
+    L -- Sim --> SET2[intent heuristic]
+    L -- Não --> FB[llm_fallback / clarificar]
 ```
 
 ---
 
 ## Tools
 
-### `tools.credit_tools.request_limit_increase` — 🟡
+### `tools.credit_tools.request_limit_increase_update` — ✅
 
 ```mermaid
 flowchart TD
-    A[request_limit_increase cpf, new_limit] --> CR[repo.create -> status pendente, request_id]
+    A[request_limit_increase] --> CR[repo.create -> status pendente]
     CR --> EV[CreditLimitService.evaluate_request]
     EV --> UP[repo.update_status aprovado/rejeitado]
     UP --> AP{aprovado?}
     AP -- Sim --> UL[customer_repo.update_limit]
     AP -- Não --> SK[não altera limite]
-    UL --> CMD[return Command update: last_request_id, last_request_status]
-    SK --> CMD
+    UL --> OUT[update: last_request_id, last_request_status]
+    SK --> OUT
 ```

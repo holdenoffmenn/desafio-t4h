@@ -2,14 +2,19 @@
 
 Sistema de atendimento bancário com agentes de IA especializados.
 
-> **Status:** Parte 1 (Fundação) implementada. Ver [`PROMPT-IMPLEMENTACAO.md`](PROMPT-IMPLEMENTACAO.md) para o plano completo.
-> Arquitetura detalhada em [`docs/ESTRATEGIA-IMPLEMENTACAO.md`](docs/ESTRATEGIA-IMPLEMENTACAO.md).
+> **Status:** Partes 1–2 implementadas. Ver [`PROMPT-IMPLEMENTACAO.md`](PROMPT-IMPLEMENTACAO.md).
+> Arquitetura: [`docs/ESTRATEGIA-IMPLEMENTACAO.md`](docs/ESTRATEGIA-IMPLEMENTACAO.md).
 
-## Parte 1 — Fundação (já disponível)
+## Progresso
 
-Camada de domínio, repositórios CSV atômicos, classifiers ML (roteamento + safety) e utilitários — **sem LLM**.
+| Parte | Conteúdo | Status |
+|---|---|---|
+| 1 | Domain + CSV + ML classifiers | ✅ |
+| 2 | LangGraph (guard, triage, router, skills, CLI) | ✅ |
+| 3 | FastAPI + Streamlit | 🔲 |
+| 4 | Langfuse + Docker + README final | 🔲 |
 
-### Setup rápido
+## Setup rápido
 
 ```bash
 python -m venv .venv
@@ -21,22 +26,30 @@ python scripts/seed_data.py
 python scripts/train_router.py
 python scripts/train_safety.py
 
-ruff check . && ruff format --check .
-pyright
-pytest tests/unit tests/integration -v --cov=src/banco_agil --cov-report=term-missing
+ruff check . && pyright
+pytest tests/unit tests/integration -v
 ```
 
-### Estrutura (Parte 1)
+## CLI (Parte 2)
+
+```bash
+# cliente seed: Ana — CPF 529.982.247-25 / nascimento 15/05/1990
+python -m banco_agil.cli
+```
+
+Fluxo sugerido: autenticação → consulta limite → aumento (ex.: 6000) → rejeição → entrevista → câmbio → encerrar.
+
+### Estrutura
 
 ```
 src/banco_agil/
-  config.py
+  config.py / deps.py / cli.py
   domain/           # regras de negócio puras
-  infrastructure/   # CSV atômico, FX client
-  ml/               # intent router + safety classifier
-  utils/            # CPF, moeda, datas
-data/               # seeds + datasets ML
-models/             # artefatos .joblib (gerados)
-scripts/            # seed_data, train_router, train_safety
-tests/
+  infrastructure/   # CSV atômico, FX, checkpointer
+  ml/               # intent router + safety
+  graph/            # state, edges, nodes, workflow
+  agents/           # persona + prompts
+  tools/            # tools tipadas
+  utils/
+data/  models/  scripts/  tests/  docs/
 ```
