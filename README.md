@@ -18,7 +18,9 @@ Sistema de atendimento ao cliente para um banco digital fictício, com agentes d
 
 ## Visão Geral
 
-O cliente conversa com **um único assistente**. Internamente, um grafo LangGraph roteia entre nós especializados após autenticação (CPF + data de nascimento). Regras financeiras (score, aprovação de limite, persistência CSV) são **código Python tipado** — o LLM (quando houver) só formata linguagem; nesta entrega o fluxo conversacional é determinístico e testável sem API paga.
+O cliente conversa com **um único assistente**. Internamente, um grafo LangGraph roteia entre nós especializados após autenticação (CPF + data de nascimento). Regras financeiras (score, aprovação de limite, persistência CSV) são **código Python tipado** — o princípio é **"LLM conversa, código decide"**.
+
+O LLM é **provider-agnostic** (Gemini, Groq, OpenAI, TogetherAI, OpenRouter) e entra como **fallback de compreensão de intenção** quando o roteamento semântico + heurística não têm confiança. Toda a lógica determinística (auth, score, limites, câmbio) funciona **sem LLM** — se nenhuma chave estiver configurada, o sistema degrada graciosamente para roteamento heurístico, mantendo-se 100% testável sem API paga.
 
 ---
 
@@ -69,6 +71,9 @@ Camadas: **UI → API → Orquestração → Domínio → Infraestrutura**. Flux
 |---|---|
 | Estado multi-turno sem loop infinito | Checkpointer por `thread_id`; skills encerram o **turno** com `END` |
 | Aumento de limite com “sim” / valor em turnos separados | Flags `awaiting_increase_confirm` / `awaiting_limit_value` |
+| Entrevista multi-turno perdia contexto entre respostas | Flag `awaiting_interview` faz o hub `router` manter o cliente no fluxo até completar os 5 campos |
+| Não amarrar a um único provedor de LLM | Camada `llm/` com factory via `init_chat_model` (Gemini/Groq/OpenAI/Together/OpenRouter) — troca por `.env` |
+| LLM indisponível não pode derrubar o atendimento | `build_chat_model` degrada para `None` (heurística) em qualquer falha; classifier trata erro/timeout |
 | CSV concorrente e corrupção | `filelock` + escrita atômica (`temp` + `os.replace`) |
 | Prompt injection | Defesa em profundidade: guard ML/regex + least privilege nas tools |
 | Observabilidade sem acoplamento | Langfuse opcional; app segue se chaves/SDK ausentes |
@@ -81,12 +86,33 @@ Camadas: **UI → API → Orquestração → Domínio → Infraestrutura**. Flux
 | Decisão | Alternativa | Por quê |
 |---|---|---|
 | **LangGraph** | CrewAI | State machine explícita, retry de auth, handoff implícito, traces claros |
+| `init_chat_model` (LangChain) | SDK por provedor | Interface única; suporta Gemini/Groq/OpenAI/Together/OpenRouter sem tocar no código |
 | FastAPI + Streamlit | Streamlit monolítico | Separação UI/motor, OpenAPI, concorrência |
 | CSV + Repository | PostgreSQL | Escopo do desafio; interface permite trocar depois |
 | TF-IDF + LogisticRegression (treino offline) | Só embeddings de API | Zero custo/rede no CI; upgrade via `EmbeddingsProvider` |
 | Safety classifier + denylist | Confiar só no prompt | Heurística probabilística **não é garantia**; least privilege é a proteção real |
 | AwesomeAPI / `FX_MOCK` | Tavily/SerpAPI | Gratuita e simples; mock para demos offline |
 | SqliteSaver | MemorySaver em prod | Persiste sessão entre restarts |
+
+---
+
+## LLM provider-agnostic
+
+A escolha do provedor é uma mudança de **configuração**, não de código. A camada `src/banco_agil/llm/` centraliza tudo:
+
+- `factory.build_chat_model(settings)` → instancia o modelo via `init_chat_model` conforme `LLM_PROVIDER`, ou retorna `None` (modo determinístico).
+- `intent.LlmIntentClassifier` → usa o modelo apenas para **classificar intenção** (`credit`/`exchange`/`interview`/`end`), nunca para decisões financeiras.
+
+| `LLM_PROVIDER` | Extra a instalar | Chave no `.env` |
+|---|---|---|
+| `gemini` (Google AI Studio) | `pip install -e ".[llm-gemini]"` | `GEMINI_API_KEY` |
+| `groq` | `pip install -e ".[llm-groq]"` | `GROQ_API_KEY` |
+| `openai` | `pip install -e ".[llm-openai]"` | `OPENAI_API_KEY` |
+| `together` | `pip install -e ".[llm-together]"` | `TOGETHER_API_KEY` |
+| `openrouter` | `pip install -e ".[llm-openai]"` | `OPENROUTER_API_KEY` (+ `OPENROUTER_BASE_URL`) |
+| `none` / `fake` | — | — (roteamento heurístico) |
+
+Defina também `LLM_MODEL` (ex.: `gemini-flash-latest`, `llama-3.1-8b-instant`, `gpt-4o-mini`). Sem chave ou pacote, a app **não quebra**: segue com roteamento semântico + heurística.
 
 ---
 
@@ -98,11 +124,14 @@ Camadas: **UI → API → Orquestração → Domínio → Infraestrutura**. Flux
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+# LLM do provedor desejado (ex.: Gemini / Google AI Studio)
+pip install -e ".[llm-gemini]"
 # opcional: Langfuse
 pip install -e ".[observability]"
 
 cp .env.example .env
-# preencher GROQ/LANGFUSE se desejar; FX_MOCK=true funciona sem rede
+# preencher a chave do provedor (ex.: GEMINI_API_KEY) e, se quiser, LANGFUSE_*
+# FX_MOCK=true funciona sem rede; LLM_PROVIDER=none desliga o LLM
 
 python scripts/seed_data.py
 python scripts/train_router.py
@@ -176,6 +205,9 @@ Ver [`.env.example`](.env.example). Destaques:
 
 | Var | Uso |
 |---|---|
+| `LLM_PROVIDER` | `gemini` \| `groq` \| `openai` \| `together` \| `openrouter` \| `none` |
+| `LLM_MODEL` | Nome do modelo no provedor (ex.: `gemini-flash-latest`) |
+| `LLM_TEMPERATURE` | Amostragem (0 = determinístico) |
 | `FX_MOCK` | Cotação fixa sem rede |
 | `SAFETY_ENABLED` | Liga/desliga nó guard |
 | `LANGFUSE_PUBLIC_KEY` / `SECRET` | Tracing (opcional) |
