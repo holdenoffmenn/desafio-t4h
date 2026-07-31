@@ -42,3 +42,7 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Docs (não versionados neste remoto)
+docs/
+fluxogramas/
