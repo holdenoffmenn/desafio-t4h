@@ -39,7 +39,11 @@ def make_router_node(
     def router_node(state: SessionState) -> dict[str, Any]:
         """Decide a intenção do turno e encaminha para o skill adequado.
 
-        Ordem: encerramento → aceite de entrevista → semântico → heurística → LLM.
+        Guardas determinísticas de continuidade (encerramento, entrevista/valor
+        em andamento, aceite de entrevista) têm prioridade. Em seguida, quando há
+        LLM configurado, ela é o **intérprete primário** da intenção; o roteador
+        semântico e a heurística de palavras-chave são a rede de segurança
+        (usados quando não há LLM ou quando a LLM não tem confiança).
 
         Args:
             state: Estado da sessão.
@@ -98,79 +102,59 @@ def make_router_node(
                 "route_confidence": 1.0,
             }
 
-        route = deps.intent_router.predict(text)
-        if route is not None and route.intent in {
-            "credit",
-            "exchange",
-            "interview",
-            "end",
-            "unknown",
-        }:
-            intent: Intent = route.intent  # type: ignore[assignment]
-            if intent == "unknown":
-                return _clarify(intent="unknown", source="semantic", confidence=route.confidence)
-            if intent == "end":
-                update = end_conversation_update()
-                update.update(
-                    {
-                        "active_agent": "router",
-                        "intent": "end",
-                        "route_source": "semantic",
-                        "route_confidence": route.confidence,
-                    }
-                )
-                return update
-            return {
-                "active_agent": "router",
-                "intent": intent,
-                "route_source": "semantic",
-                "route_confidence": route.confidence,
-            }
-
-        heur = heuristic_intent(text)
-        if heur is not None:
-            if heur == "end":
-                update = end_conversation_update()
-                update.update(
-                    {
-                        "active_agent": "router",
-                        "intent": "end",
-                        "route_source": "heuristic",
-                        "route_confidence": 0.9,
-                    }
-                )
-                return update
-            return {
-                "active_agent": "router",
-                "intent": heur,  # type: ignore[typeddict-item]
-                "route_source": "heuristic",
-                "route_confidence": 0.85,
-            }
-
+        # LLM como intérprete primário da intenção (quando configurado).
         if llm_fallback is not None:
             llm_intent = llm_fallback(text)
-            if llm_intent in {"credit", "exchange", "interview", "end"}:
-                if llm_intent == "end":
-                    update = end_conversation_update()
-                    update.update(
-                        {
-                            "active_agent": "router",
-                            "intent": "end",
-                            "route_source": "llm_fallback",
-                            "route_confidence": None,
-                        }
-                    )
-                    return update
-                return {
-                    "active_agent": "router",
-                    "intent": llm_intent,  # type: ignore[typeddict-item]
-                    "route_source": "llm_fallback",
-                    "route_confidence": None,
-                }
+            if llm_intent in _ACTIONABLE:
+                return _routed(llm_intent, source="llm_fallback", confidence=None)
+
+        # Rede de segurança 1: roteador semântico (embeddings). Só aceitamos
+        # intenções acionáveis; "unknown" cai para a heurística/clarificação.
+        route = deps.intent_router.predict(text)
+        if route is not None and route.intent in _ACTIONABLE:
+            return _routed(route.intent, source="semantic", confidence=route.confidence)
+
+        # Rede de segurança 2: heurística de palavras-chave.
+        heur = heuristic_intent(text)
+        if heur is not None:
+            return _routed(heur, source="heuristic", confidence=0.85)
 
         return _clarify(intent="unknown", source="heuristic", confidence=None)
 
     return router_node
+
+
+_ACTIONABLE: frozenset[str] = frozenset({"credit", "exchange", "interview", "end"})
+
+
+def _routed(intent: str, *, source: str, confidence: float | None) -> dict[str, Any]:
+    """Monta o update de roteamento, tratando ``end`` de forma especial.
+
+    Args:
+        intent: Intenção acionável (``credit`` | ``exchange`` | ``interview`` | ``end``).
+        source: Fonte do roteamento para observabilidade.
+        confidence: Confiança quando aplicável (``None`` para LLM/heurística fixa).
+
+    Returns:
+        Update de estado com a intenção resolvida.
+    """
+    if intent == "end":
+        update = end_conversation_update()
+        update.update(
+            {
+                "active_agent": "router",
+                "intent": "end",
+                "route_source": source,  # type: ignore[typeddict-item]
+                "route_confidence": confidence,
+            }
+        )
+        return update
+    return {
+        "active_agent": "router",
+        "intent": intent,  # type: ignore[typeddict-item]
+        "route_source": source,  # type: ignore[typeddict-item]
+        "route_confidence": confidence,
+    }
 
 
 def _clarify(
