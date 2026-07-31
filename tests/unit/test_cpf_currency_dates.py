@@ -42,6 +42,7 @@ def test_parse_flexible_date_formats() -> None:
     assert parse_flexible_date("1990-05-15") == date(1990, 5, 15)
     assert parse_flexible_date("15/05/1990") == date(1990, 5, 15)
     assert parse_flexible_date("15-05-1990") == date(1990, 5, 15)
+    assert parse_flexible_date("15051990") == date(1990, 5, 15)
     assert parse_flexible_date(date(1990, 5, 15)) == date(1990, 5, 15)
 
 

@@ -129,3 +129,28 @@ def test_exchange_mock(graph_env: tuple[object, Path]) -> None:
     state = invoke_turn(graph, session_id=sid, message="qual a cotação do dólar?")
     assert state["active_agent"] == "exchange"
     assert "cotação" in last_ai_text(state).lower() or "USD" in last_ai_text(state)
+
+
+def test_increase_flow_sim_then_value(graph_env: tuple[object, Path]) -> None:
+    """Consulta → 'sim' → valor numérico deve completar o aumento."""
+    graph, _ = graph_env
+    sid = "sess-increase"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+
+    s1 = invoke_turn(graph, session_id=sid, message="limite")
+    assert s1["active_agent"] == "credit"
+    assert s1["awaiting_increase_confirm"] is True
+
+    s2 = invoke_turn(graph, session_id=sid, message="sim")
+    assert s2["active_agent"] == "credit"
+    assert s2["awaiting_limit_value"] is True
+    assert "novo limite" in last_ai_text(s2).lower()
+
+    # Ana score 450 → max 5000; 4000 deve aprovar
+    s3 = invoke_turn(graph, session_id=sid, message="4000")
+    assert s3["active_agent"] == "credit"
+    assert s3["last_request_status"] == "aprovado"
+    assert s3["awaiting_limit_value"] is False
+    assert "aprovad" in last_ai_text(s3).lower()

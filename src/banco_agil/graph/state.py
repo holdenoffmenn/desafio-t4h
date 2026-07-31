@@ -55,6 +55,8 @@ class SessionState(TypedDict):
     last_request_status: RequestStatus | None
     offered_interview: bool
     interview_accepted: bool
+    awaiting_increase_confirm: bool
+    awaiting_limit_value: bool
 
     # Entrevista
     interview_data: dict[str, object] | None
@@ -98,6 +100,8 @@ def initial_state(session_id: str = "") -> SessionState:
         "last_request_status": None,
         "offered_interview": False,
         "interview_accepted": False,
+        "awaiting_increase_confirm": False,
+        "awaiting_limit_value": False,
         "interview_data": None,
         "interview_complete": False,
         "should_end": False,

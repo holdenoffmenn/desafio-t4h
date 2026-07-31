@@ -11,6 +11,7 @@ from banco_agil.deps import AppDeps
 from banco_agil.graph.state import Intent, SessionState
 from banco_agil.tools.session_tools import end_conversation_update
 from banco_agil.utils.conversation import (
+    extract_money,
     heuristic_intent,
     last_user_text,
     looks_like_affirmative,
@@ -59,6 +60,18 @@ def make_router_node(
                 }
             )
             return update
+
+        # Continuação do fluxo de aumento de limite (contexto entre turnos)
+        if state.get("awaiting_limit_value") or (
+            state.get("awaiting_increase_confirm")
+            and (looks_like_affirmative(text) or extract_money(text) is not None)
+        ):
+            return {
+                "active_agent": "router",
+                "intent": "credit",
+                "route_source": "heuristic",
+                "route_confidence": 1.0,
+            }
 
         # Após oferta de entrevista, "sim" / "quero" → interview
         if (

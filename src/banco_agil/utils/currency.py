@@ -5,6 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 
+def format_brl(value: float) -> str:
+    """Formata valor monetário no padrão brasileiro.
+
+    Args:
+        value: Valor em reais.
+
+    Returns:
+        String como ``23.000,00`` (sem prefixo R$).
+    """
+    formatted = f"{value:,.2f}"
+    return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def normalize_brazilian_currency(value: Any) -> float:
     """Converte string monetária BR ou número para ``float``.
 

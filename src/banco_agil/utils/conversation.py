@@ -11,7 +11,7 @@ from banco_agil.utils.currency import normalize_brazilian_currency
 from banco_agil.utils.dates import parse_flexible_date
 
 _CPF_RE = re.compile(r"\b(\d{3}\.?\d{3}\.?\d{3}-?\d{2})\b")
-_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}|\d{2}-\d{2}-\d{4})\b")
+_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}|\d{2}-\d{2}-\d{4}|\d{8})\b")
 _NUMBER_RE = re.compile(r"(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:[.,]\d+)?)")
 
 
@@ -144,6 +144,31 @@ def looks_like_end(text: str) -> bool:
     return any(token in lowered for token in tokens)
 
 
+def wants_credit_increase(text: str) -> bool:
+    """Detecta pedido explícito de aumento de limite.
+
+    Args:
+        text: Mensagem do usuário.
+
+    Returns:
+        True se houver sinal claro de solicitação de aumento.
+    """
+    lowered = text.lower()
+    return any(
+        k in lowered
+        for k in (
+            "aument",
+            "elevar",
+            "subir o limite",
+            "novo limite",
+            "solicitar aumento",
+            "pedir aumento",
+            "quero aumentar",
+            "quero um aumento",
+        )
+    )
+
+
 def heuristic_intent(text: str) -> str | None:
     """Classifica intenção por palavras-chave (fallback do roteador).
 
@@ -156,7 +181,9 @@ def heuristic_intent(text: str) -> str | None:
     lowered = text.lower()
     if looks_like_end(text):
         return "end"
-    if any(k in lowered for k in ("limite", "crédito", "credito", "cartão", "cartao", "aument")):
+    if wants_credit_increase(text) or any(
+        k in lowered for k in ("limite", "crédito", "credito", "cartão", "cartao")
+    ):
         return "credit"
     if any(
         k in lowered for k in ("dólar", "dolar", "euro", "câmbio", "cambio", "cotação", "cotacao")

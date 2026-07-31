@@ -8,7 +8,7 @@ from datetime import date, datetime
 def parse_flexible_date(value: str | date) -> date:
     """Converte string de data em ``date``.
 
-    Formatos aceitos: ``YYYY-MM-DD``, ``DD/MM/YYYY``, ``DD-MM-YYYY``.
+    Formatos aceitos: ``YYYY-MM-DD``, ``DD/MM/YYYY``, ``DD-MM-YYYY``, ``DDMMAAAA``.
 
     Args:
         value: Data como string ou já como ``date``.
@@ -26,10 +26,10 @@ def parse_flexible_date(value: str | date) -> date:
         raise TypeError(f"Tipo inválido para data: {type(value)!r}")
 
     text = value.strip()
-    formats = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y")
+    formats = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d%m%Y")
     for fmt in formats:
         try:
             return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
-    raise ValueError(f"Data inválida: {value!r}. Use YYYY-MM-DD ou DD/MM/YYYY.")
+    raise ValueError(f"Data inválida: {value!r}. Use YYYY-MM-DD, DD/MM/YYYY ou DDMMAAAA.")
