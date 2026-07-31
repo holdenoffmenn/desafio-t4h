@@ -12,9 +12,16 @@ from banco_agil.graph.workflow import build_graph, invoke_turn, last_ai_text
 from banco_agil.infrastructure.session_checkpointer import build_checkpointer
 
 
-@pytest.fixture()
-def graph_env(tmp_path: Path) -> tuple[object, Path]:
-    """Prepara data/models isolados e grafo com MemorySaver."""
+def _build_env(tmp_path: Path, *, nlu: object | None = None) -> tuple[object, Path]:
+    """Monta data/models isolados e grafo com MemorySaver.
+
+    Args:
+        tmp_path: Diretório temporário do teste.
+        nlu: Extrator LLM opcional injetado em ``deps.nlu``.
+
+    Returns:
+        Par ``(graph, data_dir)``.
+    """
     root = Path(__file__).resolve().parents[2]
     data_src = root / "data"
     models_src = root / "models"
@@ -30,6 +37,7 @@ def graph_env(tmp_path: Path) -> tuple[object, Path]:
             shutil.copy(src, models_dir / name)
 
     deps = build_deps(data_dir=data_dir, models_dir=models_dir)
+    deps.nlu = nlu  # type: ignore[assignment]
     # FX mock
     deps.settings.fx_mock = True
     deps.fx._mock = True  # noqa: SLF001
@@ -39,6 +47,33 @@ def graph_env(tmp_path: Path) -> tuple[object, Path]:
         llm_fallback=lambda text: None,
     )
     return graph, data_dir
+
+
+@pytest.fixture()
+def graph_env(tmp_path: Path) -> tuple[object, Path]:
+    """Grafo isolado sem LLM (modo determinístico/heurístico)."""
+    return _build_env(tmp_path)
+
+
+class _StubNlu:
+    """Extrator LLM fake determinístico para testar a interpretação NL."""
+
+    def money(self, text: str, field: str = "limite_credito") -> float | None:
+        table = {"sete mil": 7000.0, "quinze mil": 15000.0, "cinco mil": 5000.0}
+        lowered = text.lower()
+        return next((v for k, v in table.items() if k in lowered), None)
+
+    def tipo_emprego(self, text: str) -> str | None:
+        lowered = text.lower()
+        if "carteira" in lowered or "clt" in lowered:
+            return "formal"
+        return None
+
+    def num_dependentes(self, text: str) -> int | None:
+        return 0 if "sozinho" in text.lower() else None
+
+    def tem_dividas(self, text: str) -> str | None:
+        return "não" if "quitei" in text.lower() else None
 
 
 def test_multi_turn_auth_and_credit_lookup(graph_env: tuple[object, Path]) -> None:
@@ -140,6 +175,100 @@ def test_full_interview_flow_updates_score_and_reanalyzes(
     # score 739 → faixa 600-799 (max 15000); 6000 aprovado na reanálise
     assert final["last_request_status"] == "aprovado"
     assert "aprovad" in last_ai_text(final).lower()
+
+
+def test_reanalysis_rejected_does_not_loop_interview(
+    graph_env: tuple[object, Path],
+) -> None:
+    """Reanálise ainda rejeitada não deve re-oferecer a entrevista em loop.
+
+    Regressão: ``pending_new_limit``/``interview_complete`` não eram limpos e
+    ``offered_interview`` era resetado, fazendo cada mensagem seguinte disparar
+    nova reanálise e re-ofertar a entrevista indefinidamente.
+    """
+    graph, _ = graph_env
+    sid = "sess-reanalysis-loop"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+
+    invoke_turn(graph, session_id=sid, message="quero aumentar meu limite para 7000")
+    invoke_turn(graph, session_id=sid, message="sim")
+    invoke_turn(graph, session_id=sid, message="15000")  # renda
+    invoke_turn(graph, session_id=sid, message="formal")  # emprego
+    invoke_turn(graph, session_id=sid, message="7000")  # despesas
+    invoke_turn(graph, session_id=sid, message="0")  # dependentes
+    final = invoke_turn(graph, session_id=sid, message="não")  # dívidas → completa
+
+    # score 564 → faixa 300-599 (max 5000); 7000 permanece rejeitado
+    assert final["last_score_calculation"]["score_after"] == 564
+    assert final["last_request_status"] == "rejeitado"
+    # Estado pendente foi limpo para evitar loop
+    assert final["interview_complete"] is False
+    assert final["pending_new_limit"] is None
+    assert final["offered_interview"] is False
+    reply = last_ai_text(final).lower()
+    assert "5.000" in reply and "entrevista" not in reply
+
+    # Afirmação seguinte não re-oferece entrevista nem repete a reanálise
+    nxt = invoke_turn(graph, session_id=sid, message="pode sim")
+    assert "entrevista" not in last_ai_text(nxt).lower()
+
+
+def test_llm_interprets_natural_language_interview(tmp_path: Path) -> None:
+    """Com LLM, respostas em linguagem natural são interpretadas em cada campo.
+
+    Regressão: antes o conteúdo era lido só por regex; "sete mil" e frases
+    naturais não eram entendidas (a LLM nunca processava a resposta).
+    """
+    graph, _ = _build_env(tmp_path, nlu=_StubNlu())
+    sid = "sess-nl"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+    invoke_turn(graph, session_id=sid, message="quero aumentar meu limite")
+
+    # "sete mil" (extenso) é interpretado como 7000 pela LLM
+    rej = invoke_turn(graph, session_id=sid, message="sete mil")
+    assert rej["pending_new_limit"] == 7000.0
+    assert rej["last_request_status"] == "rejeitado"
+
+    invoke_turn(graph, session_id=sid, message="sim")
+    invoke_turn(graph, session_id=sid, message="quinze mil")  # renda -> 15000
+    invoke_turn(graph, session_id=sid, message="trabalho de carteira assinada")  # -> formal
+    invoke_turn(graph, session_id=sid, message="sete mil")  # despesas -> 7000
+    invoke_turn(graph, session_id=sid, message="moro sozinho")  # dependentes -> 0
+    final = invoke_turn(graph, session_id=sid, message="já quitei tudo")  # dívidas -> não
+
+    inputs = final["last_score_calculation"]["inputs"]
+    assert inputs["renda_mensal"] == 15000.0
+    assert inputs["tipo_emprego"] == "formal"
+    assert inputs["despesas_fixas"] == 7000.0
+    assert inputs["num_dependentes"] == 0
+    assert inputs["tem_dividas"] == "não"
+    assert final["last_score_calculation"]["score_after"] == 564
+
+
+def test_heuristic_no_false_positive_for_dividas(graph_env: tuple[object, Path]) -> None:
+    """Sem LLM, "nada devo" não pode virar tem_dividas='sim' (falso positivo).
+
+    O token ``devo`` não deve sobrepor a negação ``nada`` na frase.
+    """
+    graph, _ = graph_env
+    sid = "sess-heur"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+    invoke_turn(graph, session_id=sid, message="aumentar limite para 7000")
+    invoke_turn(graph, session_id=sid, message="sim")
+    invoke_turn(graph, session_id=sid, message="15000")
+    invoke_turn(graph, session_id=sid, message="formal")
+    invoke_turn(graph, session_id=sid, message="7000")
+    invoke_turn(graph, session_id=sid, message="0")
+    final = invoke_turn(graph, session_id=sid, message="nada devo")
+
+    assert final["last_score_calculation"]["inputs"]["tem_dividas"] == "não"
+    assert final["last_score_calculation"]["score_after"] == 564
 
 
 def test_safety_blocks_injection(graph_env: tuple[object, Path]) -> None:
