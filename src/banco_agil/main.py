@@ -18,7 +18,7 @@ from banco_agil.llm import (
     build_chat_model,
     make_llm_extractor,
     make_llm_intent_fallback,
-    make_llm_responder,
+    make_message_composer,
 )
 from banco_agil.observability.logging import configure_logging, get_logger
 
@@ -41,9 +41,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     chat_model = build_chat_model(settings)
     llm_fallback = make_llm_intent_fallback(chat_model)
     deps.nlu = make_llm_extractor(chat_model)
+    deps.composer = make_message_composer(chat_model)
     app.state.deps = deps
     app.state.tracer = build_tracer(settings)
-    app.state.responder = make_llm_responder(chat_model)
     app.state.graph = build_graph(deps, llm_fallback=llm_fallback)
     logger.info(
         "api_started",

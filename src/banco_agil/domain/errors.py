@@ -17,13 +17,13 @@ class ScoreTableError(DomainError):
     """Faixa de score inexistente ou tabela ``score_limite`` inconsistente."""
 
 
-class AuthenticationError(DomainError):
-    """Falha de autenticação (credenciais inválidas ou tentativas esgotadas)."""
-
-
 class PersistenceError(DomainError):
     """Falha de leitura/escrita em persistência (CSV, lock, etc.)."""
 
 
 class FxUnavailableError(DomainError):
     """API de câmbio indisponível ou resposta inválida."""
+
+
+class FxPairNotFoundError(FxUnavailableError):
+    """Par de moedas inexistente na fonte de câmbio (ex.: CoinNotExists)."""

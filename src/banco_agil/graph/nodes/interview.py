@@ -5,15 +5,24 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
 from banco_agil.deps import AppDeps
 from banco_agil.domain.models import InterviewInput
+from banco_agil.graph.nodes._compose import speak
 from banco_agil.graph.state import SessionState
+from banco_agil.llm.composer import MessageSpec
 from banco_agil.llm.extract import LlmExtractor
 from banco_agil.tools.interview_tools import submit_interview_data_update
 from banco_agil.utils.conversation import extract_money, last_user_text
+
+_FIELD_LABEL: dict[str, str] = {
+    "renda_mensal": "a renda mensal",
+    "tipo_emprego": "o tipo de emprego (formal, autônomo ou desempregado)",
+    "despesas_fixas": "as despesas fixas mensais",
+    "num_dependentes": "o número de dependentes",
+    "tem_dividas": "a existência de dívidas ativas",
+}
 
 Emprego = Literal["formal", "autônomo", "desempregado"]
 _FIELDS = (
@@ -66,19 +75,28 @@ def make_interview_node(deps: AppDeps):
             # Se não interpretamos a resposta do campo perguntado, re-pergunta
             # 1x de forma amigável e, se persistir, mostra um erro curto com o
             # formato esperado. Do contrário, seguimos para o próximo campo.
-            if failed_field is not None and failed_field == missing[0]:
+            reasking = failed_field is not None and failed_field == missing[0]
+            if reasking:
                 attempts = int(state.get("clarify_attempts", 0)) + 1
                 question = _reask_field(missing[0], attempts)
             else:
                 attempts = 0
                 question = _question_for(missing[0])
+            goal = f"conduzir a entrevista financeira perguntando {_FIELD_LABEL[missing[0]]}" + (
+                "; o cliente não foi entendido antes, então peça novamente com gentileza"
+                if reasking
+                else ""
+            )
             return {
                 "active_agent": "interview",
                 "interview_data": data,
                 "interview_complete": False,
                 "awaiting_interview": True,
                 "clarify_attempts": attempts,
-                "messages": [AIMessage(content=question)],
+                "messages": speak(
+                    deps.composer,
+                    MessageSpec(goal=goal, fallback=question, ask=question),
+                ),
             }
 
         try:
@@ -90,14 +108,18 @@ def make_interview_node(deps: AppDeps):
                 "interview_complete": False,
                 "awaiting_interview": True,
                 "clarify_attempts": 0,
-                "messages": [
-                    AIMessage(
-                        content=(
+                "messages": speak(
+                    deps.composer,
+                    MessageSpec(
+                        goal="informar que alguns dados pareceram inválidos e pedir a renda "
+                        "mensal em reais novamente",
+                        fallback=(
                             "Alguns dados parecem inválidos. "
                             "Informe a renda mensal em reais (ex.: 5000)."
-                        )
-                    )
-                ],
+                        ),
+                        ask="informe a renda mensal em reais (ex.: 5000)",
+                    ),
+                ),
             }
 
         customer = state.get("customer") or {}
@@ -115,14 +137,18 @@ def make_interview_node(deps: AppDeps):
         update["active_agent"] = "interview"
         update["awaiting_interview"] = False
         update["clarify_attempts"] = 0
-        update["messages"] = [
-            AIMessage(
-                content=(
+        update["messages"] = speak(
+            deps.composer,
+            MessageSpec(
+                goal="informar que a entrevista foi concluída, apresentar o novo score e "
+                "avisar que a solicitação de crédito será reanalisada",
+                fallback=(
                     f"Entrevista concluída. Seu novo score é {new_score}. "
                     "Vou reanalisar sua solicitação de crédito."
-                )
-            )
-        ]
+                ),
+                facts={"novo score": str(new_score)},
+            ),
+        )
         return update
 
     return interview_node

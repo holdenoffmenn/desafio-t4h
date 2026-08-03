@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from banco_agil.utils.conversation import extract_money
+from banco_agil.utils.conversation import extract_currency_code, extract_money
 from banco_agil.utils.cpf import is_valid_cpf, normalize_cpf
 from banco_agil.utils.currency import normalize_brazilian_currency
 from banco_agil.utils.dates import parse_flexible_date
@@ -52,6 +52,63 @@ def test_extract_money_partial_scale_words() -> None:
     assert extract_money("aumentar para 3 milhões") == 3_000_000.0
     # Por extenso completo continua a cargo do interpretador LLM.
     assert extract_money("sete mil") is None
+
+
+# ---------------------------------------------------------------------------
+# Heurística determinística (sem LLM). Quando a LLM está off, só este caminho
+# existe. Cobertura do extrator LLM: ``tests/unit/test_llm_currency.py``.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_currency_code_by_iso() -> None:
+    """Heurística: códigos ISO frequentes (sem LLM)."""
+    assert extract_currency_code("quero USD") == "USD"
+    assert extract_currency_code("quero usd") == "USD"
+    assert extract_currency_code("cotação EUR/BRL") == "EUR"
+    assert extract_currency_code("quanto está o ARS hoje") == "ARS"
+    assert extract_currency_code("cotação de KRW") == "KRW"
+    assert extract_currency_code("quero PLN") == "PLN"
+
+
+def test_extract_currency_code_by_name() -> None:
+    """Heurística: nomes em português (sem LLM)."""
+    # Regressão: "peso argentino" era silenciosamente lido como USD.
+    assert extract_currency_code("preciso saber o valor do peso argentino") == "ARS"
+    assert extract_currency_code("cotação do dólar") == "USD"
+    assert extract_currency_code("quanto está o euro") == "EUR"
+    assert extract_currency_code("libra esterlina") == "GBP"
+    assert extract_currency_code("iene japonês") == "JPY"
+    assert extract_currency_code("franco suíço") == "CHF"
+    assert extract_currency_code("iuan chinês") == "CNY"
+    # Variante específica não pode ser ofuscada pelo genérico "dólar".
+    assert extract_currency_code("dólar canadense") == "CAD"
+    assert extract_currency_code("dólar australiano") == "AUD"
+    assert extract_currency_code("won sul-coreano") == "KRW"
+    assert extract_currency_code("baht tailandês") == "THB"
+
+
+def test_extract_currency_code_by_country_or_named_currency() -> None:
+    """Heurística: país / nome → ISO (sem LLM)."""
+    # Regressão: "moeda da Rússia" precisa resolver para RUB.
+    assert extract_currency_code("tenho uma viagem para a Rússia") == "RUB"
+    assert extract_currency_code("quero rublo") == "RUB"
+    assert extract_currency_code("peso mexicano") == "MXN"
+    assert extract_currency_code("lira turca") == "TRY"
+    assert extract_currency_code("coroa norueguesa") == "NOK"
+    # "peso" genérico continua caindo em ARS (mais comum para o público BR).
+    assert extract_currency_code("quanto está o peso") == "ARS"
+
+
+def test_extract_currency_code_unknown_returns_default() -> None:
+    """Heurística: sem moeda clara devolve default (LLM cobriria em produção)."""
+    assert extract_currency_code("quero saber o câmbio") is None
+    assert extract_currency_code("bom dia") is None
+    assert extract_currency_code("qual a taxa?", default="USD") == "USD"
+
+
+def test_extract_currency_code_avoids_substring_false_positive() -> None:
+    """Heurística: 'mercado' não deve casar CAD por substring."""
+    assert extract_currency_code("como está o mercado?") is None
 
 
 def test_parse_flexible_date_formats() -> None:

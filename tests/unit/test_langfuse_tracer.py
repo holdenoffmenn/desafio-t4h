@@ -33,7 +33,7 @@ def test_tracer_records_business_events_locally() -> None:
             "active_agent": "credit",
             "authenticated": True,
             "last_request_status": "rejeitado",
-            "route_source": "heuristic",
+            "route_source": "context",
         },
     )
     assert result.enabled is False

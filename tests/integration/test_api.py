@@ -17,8 +17,8 @@ from banco_agil.deps import build_deps
 from banco_agil.graph.workflow import build_graph
 from banco_agil.infrastructure.langfuse_tracer import SessionTracer
 from banco_agil.infrastructure.session_checkpointer import build_checkpointer
+from banco_agil.llm.intent import IntentResult
 from banco_agil.main import create_app
-from banco_agil.utils.conversation import heuristic_intent
 
 
 @pytest.fixture()
@@ -38,10 +38,18 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
 
     deps = build_deps(data_dir=data_dir, models_dir=models_dir)
     deps.fx._mock = True  # noqa: SLF001
+
+    # Dublê determinístico da LLM roteadora (em produção é a LLM real).
+    def fake_llm_intent(text: str, _context: str = "") -> IntentResult:
+        lowered = text.lower()
+        if any(k in lowered for k in ("limite", "crédito", "credito", "aument")):
+            return IntentResult("credit")
+        return IntentResult(None)
+
     graph = build_graph(
         deps,
         checkpointer=build_checkpointer(memory=True),
-        llm_fallback=heuristic_intent,
+        llm_fallback=fake_llm_intent,
     )
 
     app = create_app()

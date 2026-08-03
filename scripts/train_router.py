@@ -45,9 +45,8 @@ def train(texts: list[str], labels: list[str]) -> Pipeline:
     """Treina Pipeline Tfidf + LogisticRegression.
 
     Nota:
-        Usa TF-IDF para treino offline (sem download de sentence-transformers).
-        A interface EmbeddingsProvider permanece disponível para upgrade futuro
-        com artefato ``embedding_clf``.
+        Usa TF-IDF para treino offline (sem download de modelos externos),
+        mantendo o CI sem custo/rede.
 
     Args:
         texts: Frases rotuladas.

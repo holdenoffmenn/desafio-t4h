@@ -102,26 +102,78 @@ def extract_money(text: str) -> float | None:
         return None
 
 
-def extract_currency_code(text: str, default: str = "USD") -> str:
-    """Detecta código de moeda na mensagem.
+# Códigos ISO frequentes (rede de segurança sem LLM). Moedas fora desta lista
+# são resolvidas pelo extrator LLM — a disponibilidade real fica com a API.
+_CURRENCY_CODE_RE = re.compile(
+    r"\b(USD|EUR|GBP|JPY|ARS|CAD|AUD|CHF|CNY|BTC|RUB|MXN|ZAR|INR|NOK|SEK|DKK"
+    r"|NZD|SGD|HKD|TRY|CLP|COP|PYG|UYU|BOB|PEN|ILS|AED|KRW|THB|PLN|CZK|HUF"
+    r"|RON|BGN|HRK|ISK|PHP|IDR|MYR|TWD|VND|EGP|SAR|QAR|KWD|MAD|NGN)\b",
+    re.IGNORECASE,
+)
+
+# Nomes comuns → código ISO. As variantes mais específicas ("dólar canadense",
+# "peso mexicano") precisam vir antes das genéricas ("dólar", "peso") para não
+# serem ofuscadas.
+_CURRENCY_NAME_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("dólar canadense", "dolar canadense", "canadense"), "CAD"),
+    (("dólar australiano", "dolar australiano", "australiano"), "AUD"),
+    (("dólar neozelandês", "neozeland", "nova zelândia", "nova zelandia"), "NZD"),
+    (("dólar de singapura", "singapura"), "SGD"),
+    (("dólar de hong kong", "hong kong"), "HKD"),
+    (("dólar americano", "dolar americano", "dólar", "dolar"), "USD"),
+    (("euro",), "EUR"),
+    (("libra esterlina", "libra"), "GBP"),
+    (("iene", "yen", "japon"), "JPY"),
+    (("franco suíço", "franco suico", "franco", "suíço", "suico", "suiça", "suíça"), "CHF"),
+    (("iuan", "yuan", "renminbi", "chinês", "chines", "china"), "CNY"),
+    (("rublo", "rússia", "russia", "russo"), "RUB"),
+    (("peso mexicano", "méxico", "mexico", "mexican"), "MXN"),
+    (("peso chileno", "chile"), "CLP"),
+    (("peso colombiano", "colômbia", "colombia"), "COP"),
+    (("peso uruguaio", "uruguai"), "UYU"),
+    (("guarani", "paraguai"), "PYG"),
+    (("boliviano", "bolívia", "bolivia"), "BOB"),
+    (("sol peruano", "peru"), "PEN"),
+    (("rand", "áfrica do sul", "africa do sul", "sul-africano"), "ZAR"),
+    (("rúpia", "rupia", "índia", "india"), "INR"),
+    (("coroa norueguesa", "noruega"), "NOK"),
+    (("coroa sueca", "suécia", "suecia"), "SEK"),
+    (("coroa dinamarquesa", "dinamarca"), "DKK"),
+    (("lira turca", "turquia"), "TRY"),
+    (("shekel", "israel"), "ILS"),
+    (("dirham", "emirados"), "AED"),
+    (("won", "coreia", "coreano"), "KRW"),
+    (("baht", "tailândia", "tailandia", "tailandês", "tailandes"), "THB"),
+    (("zloty", "polônia", "polonia", "polonês", "polones"), "PLN"),
+    (("peso argentino", "argentin", "peso"), "ARS"),
+    (("bitcoin",), "BTC"),
+)
+
+
+def extract_currency_code(text: str, default: str | None = None) -> str | None:
+    """Detecta o código de moeda na mensagem de forma determinística.
+
+    Reconhece códigos ISO frequentes e nomes usuais em português
+    (``"peso argentino"`` → ``ARS``, ``"iene"`` → ``JPY``, ...). É a rede de
+    segurança determinística; quando nada casa, devolve ``default`` (``None``)
+    para que o chamador acione o fallback via LLM ou peça clarificação — em vez
+    de assumir dólar silenciosamente.
 
     Args:
         text: Mensagem do usuário.
-        default: Fallback (USD).
+        default: Valor retornado quando nenhuma moeda é reconhecida.
 
     Returns:
-        Código ISO em maiúsculas.
+        Código ISO em maiúsculas ou ``default`` se não houver correspondência.
     """
-    upper = text.upper()
-    for code in ("USD", "EUR", "GBP", "JPY", "ARS", "CAD", "AUD", "CHF", "CNY"):
-        if code in upper:
+    code_match = _CURRENCY_CODE_RE.search(text)
+    if code_match is not None:
+        return code_match.group(1).upper()
+
+    lowered = text.lower()
+    for keywords, code in _CURRENCY_NAME_RULES:
+        if any(keyword in lowered for keyword in keywords):
             return code
-    if "DÓLAR" in upper or "DOLAR" in upper:
-        return "USD"
-    if "EURO" in upper:
-        return "EUR"
-    if "LIBRA" in upper:
-        return "GBP"
     return default
 
 
@@ -188,28 +240,3 @@ def wants_credit_increase(text: str) -> bool:
             "quero um aumento",
         )
     )
-
-
-def heuristic_intent(text: str) -> str | None:
-    """Classifica intenção por palavras-chave (fallback do roteador).
-
-    Args:
-        text: Mensagem do usuário.
-
-    Returns:
-        Intent ou None se não houver sinal claro.
-    """
-    lowered = text.lower()
-    if looks_like_end(text):
-        return "end"
-    if wants_credit_increase(text) or any(
-        k in lowered for k in ("limite", "crédito", "credito", "cartão", "cartao")
-    ):
-        return "credit"
-    if any(
-        k in lowered for k in ("dólar", "dolar", "euro", "câmbio", "cambio", "cotação", "cotacao")
-    ):
-        return "exchange"
-    if any(k in lowered for k in ("entrevista", "score", "renda", "financeiro")):
-        return "interview"
-    return None

@@ -16,15 +16,16 @@ from banco_agil.graph.edges import (
     route_after_triage,
 )
 from banco_agil.graph.nodes.credit import make_credit_node
-from banco_agil.graph.nodes.end import end_node
+from banco_agil.graph.nodes.end import make_end_node
 from banco_agil.graph.nodes.exchange import make_exchange_node
 from banco_agil.graph.nodes.guard import make_guard_node
 from banco_agil.graph.nodes.interview import make_interview_node
-from banco_agil.graph.nodes.router import IntentFallback, make_router_node
+from banco_agil.graph.nodes.router import make_router_node
 from banco_agil.graph.nodes.safe_reply import safe_reply_node
 from banco_agil.graph.nodes.triage import make_triage_node
 from banco_agil.graph.state import SessionState
 from banco_agil.infrastructure.session_checkpointer import build_checkpointer
+from banco_agil.llm.intent import IntentFallback
 
 
 def build_graph(
@@ -67,7 +68,7 @@ def build_graph(
     graph.add_node("interview", make_interview_node(app_deps))
     graph.add_node("exchange", make_exchange_node(app_deps))
     graph.add_node("safe_reply", safe_reply_node)
-    graph.add_node("end", end_node)
+    graph.add_node("end", make_end_node(app_deps))
 
     graph.add_edge(START, "guard")
     graph.add_conditional_edges("guard", route_after_guard)

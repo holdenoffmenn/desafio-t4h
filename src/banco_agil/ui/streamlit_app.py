@@ -11,16 +11,48 @@ from uuid import uuid4
 
 import httpx
 import streamlit as st
+import streamlit.components.v1 as components
 
 from banco_agil.config import get_settings
 
 # Velocidade do efeito de digitação (segundos por palavra) no streaming do cliente.
 _STREAM_DELAY_S = 0.02
 
+# CSS: esconde o indicador "Running" do Streamlit (aparecia como uma barra extra
+# girando junto do spinner) e garante espaço para o campo de chat ancorado.
+_UI_CSS = """
+<style>
+[data-testid="stStatusWidget"] { visibility: hidden; height: 0; }
+[data-testid="stChatInput"] { border-top: 1px solid rgba(49, 51, 63, 0.15); }
+</style>
+"""
+
+# JS: coloca o cursor no campo de chat a cada render (inclusive após a resposta).
+_FOCUS_JS = """
+<script>
+    const doc = window.parent.document;
+    const focusInput = () => {
+        const box = doc.querySelector('[data-testid="stChatInput"] textarea');
+        if (box && !box.disabled) { box.focus(); }
+    };
+    setTimeout(focusInput, 80);
+</script>
+"""
+
 
 def _api_base() -> str:
     """URL base da API (Settings / env)."""
     return get_settings().api_base_url.rstrip("/")
+
+
+def _inject_ui_polish() -> None:
+    """Aplica ajustes de UX: esconde a barra "Running" duplicada."""
+    st.markdown(_UI_CSS, unsafe_allow_html=True)
+
+
+def _focus_chat_input() -> None:
+    """Move o foco para o campo de chat (componente invisível com script)."""
+    components.html(_FOCUS_JS, height=0)
 
 
 def _ensure_session() -> None:
@@ -117,13 +149,6 @@ def _render_client_tab() -> None:
 
     if end_clicked and not st.session_state.ended:
         _queue_message("quero encerrar o atendimento")
-
-    prompt = st.chat_input(
-        "Digite sua mensagem…",
-        disabled=st.session_state.ended,
-    )
-    if prompt:
-        _queue_message(prompt)
 
 
 def _queue_message(text: str) -> None:
@@ -250,6 +275,7 @@ def main() -> None:
         layout="wide",
     )
     _ensure_session()
+    _inject_ui_polish()
     st.title("Banco Ágil")
     st.caption(f"API: `{_api_base()}`")
 
@@ -258,6 +284,18 @@ def main() -> None:
         _render_client_tab()
     with tab_back:
         _render_backoffice_tab()
+
+    # Campo de chat no nível principal → o Streamlit o ancora fixo no rodapé,
+    # sempre visível mesmo com muitas mensagens (dentro da aba ele ficaria inline).
+    prompt = st.chat_input(
+        "Digite sua mensagem…",
+        disabled=st.session_state.ended,
+    )
+    if prompt:
+        _queue_message(prompt)
+
+    # Reposiciona o cursor no campo de chat após cada render (inclusive resposta).
+    _focus_chat_input()
 
 
 main()

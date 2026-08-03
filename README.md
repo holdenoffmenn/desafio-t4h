@@ -89,7 +89,7 @@ Camadas: **UI → API → Orquestração → Domínio → Infraestrutura**. Flux
 | `init_chat_model` (LangChain) | SDK por provedor | Interface única; suporta Gemini/Groq/OpenAI/Together/OpenRouter sem tocar no código |
 | FastAPI + Streamlit | Streamlit monolítico | Separação UI/motor, OpenAPI, concorrência |
 | CSV + Repository | PostgreSQL | Escopo do desafio; interface permite trocar depois |
-| TF-IDF + LogisticRegression (treino offline) | Só embeddings de API | Zero custo/rede no CI; upgrade via `EmbeddingsProvider` |
+| TF-IDF + LogisticRegression (treino offline) | Só embeddings de API | Zero custo/rede no CI; troca do artefato sem tocar no código |
 | Safety classifier + denylist | Confiar só no prompt | Heurística probabilística **não é garantia**; least privilege é a proteção real |
 | AwesomeAPI / `FX_MOCK` | Tavily/SerpAPI | Gratuita e simples; mock para demos offline |
 | SqliteSaver | MemorySaver em prod | Persiste sessão entre restarts |

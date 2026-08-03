@@ -1,4 +1,4 @@
-"""Testes do CreditLimitService."""
+"""Testes do CreditLimitService (domínio determinístico, sem LLM)."""
 
 from datetime import date
 

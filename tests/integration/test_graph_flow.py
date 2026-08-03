@@ -11,13 +11,36 @@ import pytest
 from banco_agil.deps import build_deps
 from banco_agil.graph.workflow import build_graph, invoke_turn, last_ai_text
 from banco_agil.infrastructure.session_checkpointer import build_checkpointer
+from banco_agil.llm.intent import IntentResult
+
+IntentFallback = Callable[[str, str], IntentResult]
+
+
+def _fake_llm_intent(text: str, _context: str = "") -> IntentResult:
+    """Test double da LLM roteadora: mapeia palavras-chave → intenção.
+
+    Em produção quem classifica a intenção (com o contexto da conversa) é a LLM
+    real. Nos testes usamos um dublê determinístico para exercitar o caminho
+    LLM-primário sem chamadas de rede — devolve ``IntentResult(None)`` para o
+    que não reconhece, deixando a rede de apoio semântica/continuidade agir.
+    """
+    lowered = text.lower()
+    if any(k in lowered for k in ("encerrar", "tchau", "finalizar", "sair", "adeus")):
+        return IntentResult("end")
+    if any(k in lowered for k in ("aument", "limite", "crédito", "credito", "cartão", "cartao")):
+        return IntentResult("credit")
+    if any(k in lowered for k in ("dólar", "dolar", "euro", "câmbio", "cambio", "cotaç", "cotac")):
+        return IntentResult("exchange")
+    if any(k in lowered for k in ("entrevista", "score", "renda", "financeiro")):
+        return IntentResult("interview")
+    return IntentResult(None)
 
 
 def _build_env(
     tmp_path: Path,
     *,
     nlu: object | None = None,
-    llm_fallback: Callable[[str], str | None] | None = None,
+    llm_fallback: IntentFallback | None = None,
 ) -> tuple[object, Path]:
     """Monta data/models isolados e grafo com MemorySaver.
 
@@ -25,7 +48,7 @@ def _build_env(
         tmp_path: Diretório temporário do teste.
         nlu: Extrator LLM opcional injetado em ``deps.nlu``.
         llm_fallback: Classificador de intenção opcional (LLM). Quando ``None``,
-            usa um stub que nunca decide (força semântico/heurística).
+            usa um stub que nunca decide (força a rede de apoio semântica).
 
     Returns:
         Par ``(graph, data_dir)``.
@@ -52,14 +75,14 @@ def _build_env(
     graph = build_graph(
         deps,
         checkpointer=build_checkpointer(memory=True),
-        llm_fallback=llm_fallback or (lambda text: None),
+        llm_fallback=llm_fallback or _fake_llm_intent,
     )
     return graph, data_dir
 
 
 @pytest.fixture()
 def graph_env(tmp_path: Path) -> tuple[object, Path]:
-    """Grafo isolado sem LLM (modo determinístico/heurístico)."""
+    """Grafo isolado com LLM roteadora simulada (dublê determinístico)."""
     return _build_env(tmp_path)
 
 
@@ -82,6 +105,12 @@ class _StubNlu:
 
     def tem_dividas(self, text: str) -> str | None:
         return "não" if "quitei" in text.lower() else None
+
+    def currency(self, text: str) -> str | None:
+        return None
+
+    def birth_date(self, text: str) -> str | None:
+        return None
 
 
 def test_multi_turn_auth_and_credit_lookup(graph_env: tuple[object, Path]) -> None:
@@ -134,6 +163,7 @@ def test_auth_fails_three_times_ends(graph_env: tuple[object, Path]) -> None:
 
 
 def test_credit_reject_offers_interview(graph_env: tuple[object, Path]) -> None:
+    """Heurística: valor numérico 6000 sem LLM (``nlu=None``)."""
     graph, data_dir = graph_env
     sid = "sess-reject"
     invoke_turn(graph, session_id=sid, message="oi")
@@ -154,7 +184,7 @@ def test_credit_reject_offers_interview(graph_env: tuple[object, Path]) -> None:
 def test_full_interview_flow_updates_score_and_reanalyzes(
     graph_env: tuple[object, Path],
 ) -> None:
-    """Entrevista multi-turno: coleta campo a campo, recalcula score e reanalisa.
+    """Heurística: entrevista com valores/tokens explícitos (sem LLM).
 
     Regressão do bug de continuidade: respostas de campo eram roteadas para
     intenção desconhecida e a entrevista nunca completava.
@@ -224,7 +254,7 @@ def test_reanalysis_rejected_does_not_loop_interview(
 
 
 def test_llm_interprets_natural_language_interview(tmp_path: Path) -> None:
-    """Com LLM, respostas em linguagem natural são interpretadas em cada campo.
+    """Smoke LLM via ``_StubNlu`` (tabela fixa). Suite ampla: ``test_credit_llm``.
 
     Regressão: antes o conteúdo era lido só por regex; "sete mil" e frases
     naturais não eram entendidas (a LLM nunca processava a resposta).
@@ -292,6 +322,7 @@ def test_safety_blocks_injection(graph_env: tuple[object, Path]) -> None:
 
 
 def test_exchange_mock(graph_env: tuple[object, Path]) -> None:
+    """Heurística: 'dólar' → USD com ``deps.nlu=None`` (sem LLM de moeda)."""
     graph, _ = graph_env
     sid = "sess-fx"
     invoke_turn(graph, session_id=sid, message="oi")
@@ -302,8 +333,107 @@ def test_exchange_mock(graph_env: tuple[object, Path]) -> None:
     assert "cotação" in last_ai_text(state).lower() or "USD" in last_ai_text(state)
 
 
+def test_exchange_recognizes_named_currency(graph_env: tuple[object, Path]) -> None:
+    """Heurística: 'peso argentino' → ARS sem LLM (``nlu=None``)."""
+    graph, _ = graph_env
+    sid = "sess-fx-ars"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+    state = invoke_turn(graph, session_id=sid, message="preciso da cotação do peso argentino")
+    assert state["active_agent"] == "exchange"
+    assert state["last_tool_calls"][0]["args"]["currency"] == "ARS"
+    assert "ARS" in last_ai_text(state)
+
+
+def test_exchange_asks_when_currency_unclear(tmp_path: Path) -> None:
+    """Sem moeda clara e sem NLU (LLM off), o câmbio pergunta em vez de assumir USD.
+
+    Caminho equivalente com LLM: ``tests/integration/test_exchange_llm.py``.
+    """
+    graph, _ = _build_env(tmp_path, llm_fallback=lambda text, context: IntentResult("exchange"))
+    sid = "sess-fx-clarify"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    invoke_turn(graph, session_id=sid, message="15/05/1990")
+    state = invoke_turn(graph, session_id=sid, message="quero ver o câmbio")
+    assert state["active_agent"] == "exchange"
+    # Perguntou pela moeda em vez de cotar: nenhuma taxa BRL na resposta.
+    reply = last_ai_text(state).lower()
+    assert "moeda" in reply
+    assert "/brl" not in reply
+
+
+def test_triage_unrecognized_date_is_friendly_not_repeat(
+    graph_env: tuple[object, Path],
+) -> None:
+    """Data fora do padrão não deve repetir a mensagem: avisa que não entendeu."""
+    graph, _ = graph_env
+    sid = "sess-baddate"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    state = invoke_turn(graph, session_id=sid, message="19-091991")
+    assert state["authenticated"] is False
+    reply = last_ai_text(state).lower()
+    assert "reconhecer a data" in reply
+    assert "obrigado" not in reply  # não é a mensagem de agradecimento do CPF
+
+    # Uma data válida na sequência autentica normalmente (CPF foi preservado).
+    ok = invoke_turn(graph, session_id=sid, message="15/05/1990")
+    assert ok["authenticated"] is True
+
+
+def test_triage_uses_nlu_to_recover_malformed_date(tmp_path: Path) -> None:
+    """Com NLU disponível, uma data em linguagem natural é interpretada e autentica."""
+
+    class _DateNlu(_StubNlu):
+        def birth_date(self, text: str) -> str | None:
+            return "1990-05-15" if "quinze" in text.lower() else None
+
+    graph, _ = _build_env(tmp_path, nlu=_DateNlu())
+    sid = "sess-nlu-date"
+    invoke_turn(graph, session_id=sid, message="oi")
+    invoke_turn(graph, session_id=sid, message="52998224725")
+    state = invoke_turn(graph, session_id=sid, message="nasci em quinze de maio de 1990")
+    assert state["authenticated"] is True
+
+
+def test_triage_recovers_date_when_cpf_and_date_together(tmp_path: Path) -> None:
+    """CPF e data no mesmo turno, com data fora do padrão, autentica via NLU."""
+
+    class _DateNlu(_StubNlu):
+        def birth_date(self, text: str) -> str | None:
+            return "1990-05-15" if "1990" in text else None
+
+    graph, _ = _build_env(tmp_path, nlu=_DateNlu())
+    sid = "sess-cpf-date-together"
+    invoke_turn(graph, session_id=sid, message="oi")
+    state = invoke_turn(
+        graph,
+        session_id=sid,
+        message="meu cpf é 52998224725 e nasci em 15-051990",
+    )
+    assert state["authenticated"] is True
+
+
+def test_triage_cpf_and_bad_date_together_is_friendly(tmp_path: Path) -> None:
+    """CPF + data ilegível juntos (sem NLU): avisa que não reconheceu a data."""
+    graph, _ = _build_env(tmp_path)  # nlu=None
+    sid = "sess-cpf-baddate-together"
+    invoke_turn(graph, session_id=sid, message="oi")
+    state = invoke_turn(
+        graph,
+        session_id=sid,
+        message="meu cpf é 52998224725 e nasci em 15-051990",
+    )
+    assert state["authenticated"] is False
+    reply = last_ai_text(state).lower()
+    assert "reconhecer a data" in reply
+    assert "obrigado" not in reply
+
+
 def test_credit_understands_partial_scale_value(graph_env: tuple[object, Path]) -> None:
-    """"25 mil reais" deve virar 25000 (e não R$ 25), mesmo sem LLM.
+    """Heurística: "25 mil reais" → 25000 (sem LLM).
 
     Regressão do bug do R$ 25,00: a heurística capturava só o "25" antes de
     "mil". Agora a rede de segurança entende o multiplicador parcial.
@@ -324,7 +454,7 @@ def test_credit_understands_partial_scale_value(graph_env: tuple[object, Path]) 
 def test_credit_reasks_then_errors_on_unparseable_value(
     graph_env: tuple[object, Path],
 ) -> None:
-    """Valor não interpretável: re-pergunta 1x amigável e depois erro curto."""
+    """Heurística: valor não interpretável (sem LLM) → re-pergunta e erro curto."""
     graph, _ = graph_env
     sid = "sess-reask-limit"
     invoke_turn(graph, session_id=sid, message="oi")
@@ -379,7 +509,7 @@ def test_llm_is_primary_intent_router(tmp_path: Path) -> None:
 
     Mesmo que o semântico pudesse sugerir crédito, a decisão da LLM prevalece.
     """
-    graph, _ = _build_env(tmp_path, llm_fallback=lambda text: "exchange")
+    graph, _ = _build_env(tmp_path, llm_fallback=lambda text, context: IntentResult("exchange"))
     sid = "sess-llm-primary"
     invoke_turn(graph, session_id=sid, message="oi")
     invoke_turn(graph, session_id=sid, message="52998224725")

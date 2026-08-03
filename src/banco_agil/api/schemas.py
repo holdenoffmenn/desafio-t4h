@@ -22,7 +22,7 @@ class ChatRequest(BaseModel):
 class RouteMeta(BaseModel):
     """Metadados do roteamento de intenção."""
 
-    source: Literal["semantic", "llm_fallback", "heuristic"] | None = None
+    source: Literal["semantic", "llm_fallback", "context", "error"] | None = None
     confidence: float | None = None
 
 

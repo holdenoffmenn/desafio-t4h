@@ -66,6 +66,53 @@ def test_build_success_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["kwargs"]["api_key"] == "secret"
 
 
+def test_temperature_omitted_for_fixed_sampling_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gemini-3.6-flash ignora sampling: temperature não deve ir no request."""
+    import langchain.chat_models as lcm
+
+    captured: dict[str, Any] = {}
+
+    def fake_init(model: str, **kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(lcm, "init_chat_model", fake_init)
+    build_chat_model(
+        _settings(
+            llm_provider="gemini",
+            gemini_api_key="k",
+            llm_model="gemini-3.6-flash",
+        )
+    )
+    assert "temperature" not in captured
+
+
+def test_temperature_passed_for_regular_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Modelo que respeita sampling recebe temperature (determinismo bancário)."""
+    import langchain.chat_models as lcm
+
+    captured: dict[str, Any] = {}
+
+    def fake_init(model: str, **kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(lcm, "init_chat_model", fake_init)
+    build_chat_model(
+        _settings(
+            llm_provider="gemini",
+            gemini_api_key="k",
+            llm_model="gemini-flash-latest",
+            llm_temperature=0.0,
+        )
+    )
+    assert captured["temperature"] == 0.0
+
+
 def test_build_init_error_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
     """Qualquer erro no init deve degradar para None (não levantar)."""
     import langchain.chat_models as lcm

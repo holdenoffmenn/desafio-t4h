@@ -81,20 +81,13 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             detail="Erro interno ao processar o atendimento.",
         ) from exc
 
-    canonical_reply = build_reply(
+    # As mensagens já foram redigidas pelo compositor (LLM) dentro dos nós, com
+    # os fatos preservados; aqui apenas extraímos o texto final ao cliente.
+    reply = build_reply(
         state,
         fallback="Desculpe, não consegui formular uma resposta agora.",
     )
 
-    # Camada de voz: humaniza a resposta determinística. Respostas de segurança
-    # (safe_reply) não são reescritas para não suavizar a recusa.
-    responder = getattr(request.app.state, "responder", None)
-    reply = canonical_reply
-    if responder is not None and state.get("active_agent") != "safe_reply":
-        reply = responder.humanize(canonical_reply)
-
-    # Observabilidade: o trace registra o output realmente exibido ao cliente
-    # (humanizado), mantendo o texto canônico na metadata para auditoria.
     trace_url: str | None = None
     if tracer is not None:
         try:

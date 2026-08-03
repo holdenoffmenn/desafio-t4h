@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import AIMessage
-
 from banco_agil.deps import AppDeps
 from banco_agil.domain.models import Customer
+from banco_agil.graph.nodes._compose import speak
 from banco_agil.graph.state import SessionState
+from banco_agil.llm.composer import MessageSpec
 
 if TYPE_CHECKING:
+    from banco_agil.llm.composer import MessageComposer
     from banco_agil.llm.extract import LlmExtractor
 from banco_agil.tools.credit_tools import (
     get_credit_limit_update,
@@ -58,16 +59,26 @@ def make_credit_node(deps: AppDeps):
             update["active_agent"] = "credit"
             update["awaiting_increase_confirm"] = False
             update["awaiting_limit_value"] = False
-            update["messages"] = [AIMessage(content="Atendimento encerrado. Até logo!")]
+            update["messages"] = speak(
+                deps.composer,
+                MessageSpec(
+                    goal="encerrar o atendimento de crédito de forma cordial",
+                    fallback="Atendimento encerrado. Até logo!",
+                ),
+            )
             return update
 
         customer_data = state.get("customer")
         if not customer_data:
             return {
                 "active_agent": "credit",
-                "messages": [
-                    AIMessage(content="Preciso autenticar você antes de falar sobre crédito.")
-                ],
+                "messages": speak(
+                    deps.composer,
+                    MessageSpec(
+                        goal="explicar que é preciso autenticar antes de tratar de crédito",
+                        fallback="Preciso autenticar você antes de falar sobre crédito.",
+                    ),
+                ),
             }
 
         customer = Customer.model_validate(customer_data)
@@ -89,14 +100,18 @@ def make_credit_node(deps: AppDeps):
                 "awaiting_increase_confirm": False,
                 "awaiting_limit_value": False,
                 "clarify_attempts": 0,
-                "messages": [
-                    AIMessage(
-                        content=(
+                "messages": speak(
+                    deps.composer,
+                    MessageSpec(
+                        goal="aceitar a recusa da entrevista, informar que o pedido segue "
+                        "rejeitado por ora e oferecer mais ajuda",
+                        fallback=(
                             "Tudo bem. Seu pedido permanece rejeitado por enquanto. "
                             "Posso ajudar com mais alguma coisa — crédito ou câmbio?"
-                        )
-                    )
-                ],
+                        ),
+                        ask="se posso ajudar com mais alguma coisa (crédito ou câmbio)",
+                    ),
+                ),
             }
 
         awaiting_value = bool(state.get("awaiting_limit_value"))
@@ -117,20 +132,24 @@ def make_credit_node(deps: AppDeps):
                 "awaiting_increase_confirm": False,
                 "awaiting_limit_value": False,
                 "clarify_attempts": 0,
-                "messages": [
-                    AIMessage(
-                        content=(
+                "messages": speak(
+                    deps.composer,
+                    MessageSpec(
+                        goal="confirmar que o limite permanece o atual e oferecer mais ajuda",
+                        fallback=(
                             "Sem problemas. Seu limite permanece em "
                             f"R$ {format_brl(customer.limite_atual)}. "
                             "Posso ajudar com mais alguma coisa?"
-                        )
-                    )
-                ],
+                        ),
+                        facts={"limite atual": f"R$ {format_brl(customer.limite_atual)}"},
+                        ask="se posso ajudar com mais alguma coisa",
+                    ),
+                ),
             }
 
         # "sim" / "quero" após oferta → pedir o valor
         if awaiting_confirm and looks_like_affirmative(text) and new_limit is None:
-            return _ask_for_limit_value(customer)
+            return _ask_for_limit_value(deps.composer, customer)
 
         # Valor informado enquanto aguardamos (ou junto com pedido de aumento)
         if new_limit is not None and (
@@ -146,11 +165,11 @@ def make_credit_node(deps: AppDeps):
         # nem assumir valores).
         if awaiting_value and new_limit is None:
             attempts = int(state.get("clarify_attempts", 0)) + 1
-            return _reask_limit_value(customer, attempts)
+            return _reask_limit_value(deps.composer, customer, attempts)
 
         # Pedido de aumento sem valor → primeira pergunta do valor
         if wants_increase:
-            return _ask_for_limit_value(customer)
+            return _ask_for_limit_value(deps.composer, customer)
 
         # Default: consulta + oferece aumento (abre contexto para "sim")
         obs = get_credit_limit_update(customer)
@@ -160,16 +179,21 @@ def make_credit_node(deps: AppDeps):
             "awaiting_increase_confirm": True,
             "awaiting_limit_value": False,
             "clarify_attempts": 0,
-            "messages": [
-                AIMessage(
-                    content=(
+            "messages": speak(
+                deps.composer,
+                MessageSpec(
+                    goal="informar o limite de crédito disponível e oferecer registrar "
+                    "uma solicitação de aumento",
+                    fallback=(
                         "Seu limite de crédito disponível é "
                         f"R$ {format_brl(customer.limite_atual)}. "
                         "Se quiser, posso registrar uma solicitação de aumento. "
                         "Deseja solicitar?"
-                    )
-                )
-            ],
+                    ),
+                    facts={"limite disponível": f"R$ {format_brl(customer.limite_atual)}"},
+                    ask="se deseja solicitar um aumento de limite",
+                ),
+            ),
         }
 
     return credit_node
@@ -203,7 +227,7 @@ def _interpret_limit(
     return extract_money(text)
 
 
-def _ask_for_limit_value(customer: Customer) -> dict[str, Any]:
+def _ask_for_limit_value(composer: MessageComposer | None, customer: Customer) -> dict[str, Any]:
     """Pede o novo limite e marca o estado de espera do valor."""
     obs = get_credit_limit_update(customer)
     return {
@@ -212,22 +236,31 @@ def _ask_for_limit_value(customer: Customer) -> dict[str, Any]:
         "awaiting_increase_confirm": False,
         "awaiting_limit_value": True,
         "clarify_attempts": 0,
-        "messages": [
-            AIMessage(
-                content=(
+        "messages": speak(
+            composer,
+            MessageSpec(
+                goal="informar o limite atual e perguntar qual o novo limite desejado",
+                fallback=(
                     f"Seu limite atual é R$ {format_brl(customer.limite_atual)}. "
                     "Qual o novo limite que você deseja solicitar? "
                     "(informe apenas o valor, por exemplo: 30000)"
-                )
-            )
-        ],
+                ),
+                facts={"limite atual": f"R$ {format_brl(customer.limite_atual)}"},
+                ask="qual o novo limite desejado (apenas o valor, por exemplo: 30000)",
+            ),
+        ),
     }
 
 
-def _reask_limit_value(customer: Customer, attempts: int) -> dict[str, Any]:
+def _reask_limit_value(
+    composer: MessageComposer | None,
+    customer: Customer,
+    attempts: int,
+) -> dict[str, Any]:
     """Re-pergunta o valor (1x amigável) e, se persistir, mostra erro curto.
 
     Args:
+        composer: Compositor LLM opcional.
         customer: Cliente autenticado (para manter o contexto do limite atual).
         attempts: Nº de tentativas malsucedidas de interpretar o valor.
 
@@ -236,14 +269,22 @@ def _reask_limit_value(customer: Customer, attempts: int) -> dict[str, Any]:
     """
     obs = get_credit_limit_update(customer)
     if attempts <= 1:
-        message = (
-            "Desculpe, não consegui identificar o valor. Qual novo limite você "
-            "gostaria de solicitar, em reais? (por exemplo: 30000)"
+        spec = MessageSpec(
+            goal="desculpar-se por não entender o valor e pedir novamente o novo limite em reais",
+            fallback=(
+                "Desculpe, não consegui identificar o valor. Qual novo limite você "
+                "gostaria de solicitar, em reais? (por exemplo: 30000)"
+            ),
+            ask="qual o novo limite em reais (por exemplo: 30000)",
         )
     else:
-        message = (
-            "Ainda não entendi o valor. Envie apenas o número, sem outras "
-            "palavras — por exemplo: 30000."
+        spec = MessageSpec(
+            goal="reforçar que só entende o valor numérico e pedir apenas o número",
+            fallback=(
+                "Ainda não entendi o valor. Envie apenas o número, sem outras "
+                "palavras — por exemplo: 30000."
+            ),
+            ask="envie apenas o número do limite, por exemplo: 30000",
         )
     return {
         "active_agent": "credit",
@@ -251,7 +292,7 @@ def _reask_limit_value(customer: Customer, attempts: int) -> dict[str, Any]:
         "awaiting_increase_confirm": False,
         "awaiting_limit_value": True,
         "clarify_attempts": attempts,
-        "messages": [AIMessage(content=message)],
+        "messages": speak(composer, spec),
     }
 
 
@@ -279,17 +320,23 @@ def _process_increase(
     update["clarify_attempts"] = 0
 
     status = update["last_request_status"]
+    limit_str = f"R$ {format_brl(new_limit)}"
     if status == "aprovado":
         update["interview_complete"] = False
         prefix = "Após a atualização do seu score, " if reanalysis else ""
-        update["messages"] = [
-            AIMessage(
-                content=(
-                    f"{prefix}sua solicitação de aumento para R$ {format_brl(new_limit)} "
-                    f"foi aprovada. Seu novo limite é R$ {format_brl(new_limit)}."
-                )
-            )
-        ]
+        update["messages"] = speak(
+            deps.composer,
+            MessageSpec(
+                goal="comunicar a aprovação do aumento e o novo limite, comemorando com o cliente"
+                + (" após a atualização do score" if reanalysis else ""),
+                fallback=(
+                    f"{prefix}sua solicitação de aumento para {limit_str} "
+                    f"foi aprovada. Seu novo limite é {limit_str}."
+                ),
+                facts={"novo limite aprovado": limit_str},
+                must_include=("aprovad",),
+            ),
+        )
         return update
 
     reason = ""
@@ -308,40 +355,69 @@ def _process_increase(
         update["interview_accepted"] = False
         if reason == "limite_menor_que_atual":
             body = (
-                f"O valor solicitado (R$ {format_brl(new_limit)}) não é maior que seu "
+                f"O valor solicitado ({limit_str}) não é maior que seu "
                 f"limite atual de R$ {format_brl(customer.limite_atual)}."
             )
+            facts = {
+                "limite solicitado": limit_str,
+                "limite atual": f"R$ {format_brl(customer.limite_atual)}",
+            }
         else:
             body = (
                 f"Mesmo após a atualização, seu score ({customer.score}) permite um "
                 f"limite de até R$ {format_brl(max_allowed)}, abaixo dos "
-                f"R$ {format_brl(new_limit)} solicitados. Posso registrar um aumento "
+                f"{limit_str} solicitados. Posso registrar um aumento "
                 f"de até R$ {format_brl(max_allowed)}, se desejar."
             )
-        update["messages"] = [AIMessage(content=f"{body} Posso ajudar com mais alguma coisa?")]
+            facts = {
+                "score atualizado": str(customer.score),
+                "limite máximo permitido": f"R$ {format_brl(max_allowed)}",
+                "limite solicitado": limit_str,
+            }
+        update["messages"] = speak(
+            deps.composer,
+            MessageSpec(
+                goal="explicar que, mesmo após a reanálise, o valor solicitado não foi "
+                "aprovado, informando o teto permitido, e oferecer mais ajuda",
+                fallback=f"{body} Posso ajudar com mais alguma coisa?",
+                facts=facts,
+                ask="se posso ajudar com mais alguma coisa",
+            ),
+        )
         return update
 
     already_offered = bool(state.get("offered_interview"))
     if not already_offered:
         offer = offer_credit_interview_update()
         update.update(offer)
-        update["messages"] = [
-            AIMessage(
-                content=(
-                    f"Sua solicitação de R$ {format_brl(new_limit)} foi rejeitada"
+        update["messages"] = speak(
+            deps.composer,
+            MessageSpec(
+                goal="informar a rejeição do aumento e oferecer uma entrevista financeira "
+                "para atualizar o score e tentar novamente",
+                fallback=(
+                    f"Sua solicitação de {limit_str} foi rejeitada"
                     f"{f' ({reason})' if reason else ''}. "
                     "Posso conduzir uma entrevista financeira para atualizar seu score "
                     "e tentar novamente. Deseja seguir com a entrevista?"
-                )
-            )
-        ]
+                ),
+                facts={"limite solicitado": limit_str},
+                ask="se deseja seguir com a entrevista financeira",
+                must_include=("rejeitad",),
+            ),
+        )
     else:
-        update["messages"] = [
-            AIMessage(
-                content=(
-                    f"A solicitação de R$ {format_brl(new_limit)} continua rejeitada "
+        update["messages"] = speak(
+            deps.composer,
+            MessageSpec(
+                goal="reiterar que a solicitação segue rejeitada para o score atual e "
+                "oferecer mais ajuda",
+                fallback=(
+                    f"A solicitação de {limit_str} continua rejeitada "
                     "para o score atual. Posso ajudar com mais alguma coisa?"
-                )
-            )
-        ]
+                ),
+                facts={"limite solicitado": limit_str},
+                ask="se posso ajudar com mais alguma coisa",
+            ),
+        )
     return update

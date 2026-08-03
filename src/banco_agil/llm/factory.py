@@ -8,6 +8,7 @@ uma mudança de configuração (`.env`), não de código.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -36,8 +37,43 @@ _PROVIDER_ALIASES: dict[str, str] = {
 _DISABLED: frozenset[str] = frozenset({"", "none", "fake", "off", "disabled"})
 
 
+# Modelos Gemini que fixam o sampling e IGNORAM ``temperature`` (a partir do
+# 3.6 Flash / 3.5 Flash-Lite). Enviar o parâmetro dispara um warning e não tem
+# efeito — então o omitimos. Mantido em paridade com o allowlist do pacote.
+_GEMINI_FIXED_SAMPLING_MODELS: frozenset[str] = frozenset(
+    {"gemini-3.5-flash-lite", "gemini-3.6-flash"}
+)
+
+
 class LLMProviderError(RuntimeError):
     """Provedor desconhecido ou mal configurado."""
+
+
+def _ignores_sampling_params(model_provider: str, model_name: str) -> bool:
+    """Indica se o modelo ignora parâmetros de sampling (ex.: ``temperature``).
+
+    Reusa a checagem interna do ``langchain_google_genai`` quando disponível
+    (fonte da verdade, atualizada a cada novo modelo GA) e cai num allowlist
+    local caso o símbolo interno mude.
+
+    Args:
+        model_provider: Provedor resolvido (ex.: ``google_genai``).
+        model_name: Nome do modelo configurado.
+
+    Returns:
+        ``True`` se ``temperature`` não deve ser enviado ao provedor.
+    """
+    if model_provider != "google_genai":
+        return False
+    try:
+        from langchain_google_genai.chat_models import (
+            _uses_fixed_sampling_and_disallows_prefill as _fixed,
+        )
+
+        return bool(_fixed(model_name))
+    except Exception:  # noqa: BLE001 - fallback se a API interna mudar
+        normalized = re.sub(r"-\d{3}$", "", model_name.lower().rsplit("/", 1)[-1])
+        return normalized in _GEMINI_FIXED_SAMPLING_MODELS
 
 
 @dataclass(frozen=True)
@@ -134,12 +170,17 @@ def build_chat_model(settings: Settings | None = None) -> BaseChatModel | None:
         )
         return None
 
+    init_kwargs: dict[str, Any] = dict(provider_cfg.kwargs)
+    # Só enviamos temperature a modelos que a respeitam: os de sampling fixo
+    # (ex.: gemini-3.6-flash) a ignoram e emitem warning se ela vier no request.
+    if not _ignores_sampling_params(provider_cfg.model_provider, cfg_settings.llm_model):
+        init_kwargs["temperature"] = cfg_settings.llm_temperature
+
     try:
         model = init_chat_model(
             cfg_settings.llm_model,
             model_provider=provider_cfg.model_provider,
-            temperature=cfg_settings.llm_temperature,
-            **provider_cfg.kwargs,
+            **init_kwargs,
         )
     # Captura ampla é intencional: provider package ausente, credencial
     # inválida ou incompatibilidade de versão não devem derrubar a app.

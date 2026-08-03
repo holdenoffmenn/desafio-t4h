@@ -3,11 +3,12 @@
 from datetime import date
 from pathlib import Path
 
+import httpx
 import pytest
 
 from banco_agil.domain.errors import (
     CustomerNotFoundError,
-    FxUnavailableError,
+    FxPairNotFoundError,
     ScoreTableError,
 )
 from banco_agil.infrastructure.credit_request_repository import CsvCreditRequestRepository
@@ -116,7 +117,30 @@ def test_fx_client_mock() -> None:
     assert rate.timestamp == "mock"
 
 
-def test_fx_client_unsupported_pair() -> None:
+def test_fx_client_pair_not_found() -> None:
+    """404 / CoinNotExists da AwesomeAPI vira FxPairNotFoundError (sem retry)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "status": 404,
+                "code": "CoinNotExists",
+                "message": "moeda nao encontrada XYZ-BRL",
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as http_client:
+        client = FxClient(
+            api_url_template="https://example.com/json/last/{pair}",
+            client=http_client,
+        )
+        with pytest.raises(FxPairNotFoundError):
+            client.get_rate("XYZ")
+
+
+def test_fx_client_rejects_invalid_currency_code() -> None:
     client = FxClient(api_url_template="https://example.com/{pair}", mock=True)
-    with pytest.raises(FxUnavailableError):
-        client.get_rate("XYZ")
+    with pytest.raises(ValueError):
+        client.get_rate("XY")

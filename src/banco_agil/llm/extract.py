@@ -14,6 +14,7 @@ import re
 from typing import TYPE_CHECKING, Literal
 
 from banco_agil.llm._content import content_to_text
+from banco_agil.llm._retry import invoke_with_retry
 from banco_agil.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -61,6 +62,29 @@ _DIVIDAS_PROMPT = (
     "'tenho dívidas', 'devo no cartão', 'estou negativado' -> sim. "
     "Responda APENAS: sim, não, ou null."
 )
+
+_CURRENCY_PROMPT = (
+    "Identifique a moeda estrangeira que o cliente quer cotar contra o real (BRL). "
+    "Responda APENAS com o código ISO 4217 de 3 letras em maiúsculas — qualquer moeda "
+    "válida (comum ou menos usual). "
+    "Exemplos: 'dólar' -> USD; 'euro' -> EUR; 'peso argentino' -> ARS; "
+    "'iene japonês' -> JPY; 'libra esterlina' -> GBP; 'franco suíço' -> CHF; "
+    "'dólar canadense' -> CAD; 'dólar australiano' -> AUD; 'iuan' -> CNY; "
+    "'won sul-coreano' / 'moeda da Coreia do Sul' -> KRW; "
+    "'baht tailandês' -> THB; 'zloty' / 'Polônia' -> PLN; 'bitcoin' -> BTC. "
+    "Se não houver moeda clara, responda null."
+)
+
+_DATE_PROMPT = (
+    "Extraia a data de nascimento informada pelo cliente e normalize-a. "
+    "Interprete formatos variados e com erros de digitação, assumindo a ordem "
+    "dia-mês-ano do padrão brasileiro. "
+    "Exemplos: '19-091991' -> 1991-09-19; '19/09/1991' -> 1991-09-19; "
+    "'19 de setembro de 1991' -> 1991-09-19; '1991-09-19' -> 1991-09-19. "
+    "Responda APENAS no formato AAAA-MM-DD, ou null se não houver data."
+)
+
+_ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
 
 class LlmExtractor:
@@ -160,6 +184,48 @@ class LlmExtractor:
             return "sim"
         return None
 
+    def currency(self, text: str) -> str | None:
+        """Extrai o código ISO da moeda a cotar a partir de texto livre.
+
+        Fallback do heurístico ``extract_currency_code`` para nomes que a rede
+        determinística não cobre (ex.: variações regionais). A disponibilidade
+        real da cotação fica a cargo do ``FxClient`` / da API de câmbio.
+
+        Args:
+            text: Mensagem do usuário (ex.: "quanto está o peso argentino").
+
+        Returns:
+            Código ISO em maiúsculas (3 letras) ou ``None`` se não houver/erro.
+        """
+        raw = self._ask(_CURRENCY_PROMPT, text)
+        if raw is None:
+            return None
+        # Exige o código como token isolado ("usd", "ars.") para não capturar as
+        # 3 primeiras letras de uma frase qualquer ("moeda" -> "moe").
+        match = re.search(r"\b([a-z]{3})\b", raw)
+        if match is None:
+            return None
+        return match.group(1).upper()
+
+    def birth_date(self, text: str) -> str | None:
+        """Extrai a data de nascimento e normaliza para ``AAAA-MM-DD``.
+
+        Fallback do regex ``extract_date`` para formatos fora do padrão ou com
+        erros de digitação (ex.: ``"19-091991"``). A validação da data em si (e
+        a conferência com o cadastro) permanece no código determinístico.
+
+        Args:
+            text: Mensagem do usuário.
+
+        Returns:
+            Data ISO ``AAAA-MM-DD`` ou ``None`` se não houver/erro.
+        """
+        raw = self._ask(_DATE_PROMPT, text)
+        if raw is None:
+            return None
+        match = _ISO_DATE_RE.search(raw)
+        return match.group(1) if match is not None else None
+
     def _ask(self, system_prompt: str, text: str) -> str | None:
         """Invoca o modelo e devolve a resposta em minúsculas (ou ``None``).
 
@@ -176,12 +242,14 @@ class LlmExtractor:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         try:
-            response = self._model.invoke(
-                [SystemMessage(content=system_prompt), HumanMessage(content=text)]
+            response = invoke_with_retry(
+                self._model,
+                [SystemMessage(content=system_prompt), HumanMessage(content=text)],
+                event="llm_extract_failed",
             )
-        # Falha de rede/quota/timeout não pode derrubar o turno.
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("llm_extract_failed", error=str(exc))
+        # Após as tentativas, falha de rede/quota degrada para ``None``: o nó
+        # re-pergunta o campo de forma amigável (sem inventar valores).
+        except Exception:  # noqa: BLE001
             return None
 
         answer = content_to_text(response.content).strip().lower()

@@ -63,12 +63,39 @@ def test_tem_dividas() -> None:
     assert _ext("null").tem_dividas("prefiro não dizer") is None
 
 
+# Casos amplos de currency via LLM: ``tests/unit/test_llm_currency.py``.
+
+
+def test_currency_returns_iso_code() -> None:
+    """Smoke do extrator LLM de moeda (suite completa em test_llm_currency)."""
+    assert _ext("ARS").currency("peso argentino") == "ARS"
+    assert _ext("usd").currency("dólar") == "USD"
+    assert _ext("JPY.").currency("iene japonês") == "JPY"
+
+
+def test_currency_null_and_garbage_return_none() -> None:
+    assert _ext("null").currency("não sei") is None
+    assert _ext("moeda estrangeira").currency("x") is None
+
+
+def test_birth_date_normalizes_to_iso() -> None:
+    assert _ext("1991-09-19").birth_date("19-091991") == "1991-09-19"
+    assert _ext("a data é 1990-05-15.").birth_date("15 de maio de 1990") == "1990-05-15"
+
+
+def test_birth_date_null_and_garbage_return_none() -> None:
+    assert _ext("null").birth_date("não lembro") is None
+    assert _ext("sem data").birth_date("x") is None
+
+
 def test_error_degrades_to_none() -> None:
     ext = _ext(raises=True)
     assert ext.money("sete mil") is None
     assert ext.tipo_emprego("clt") is None
     assert ext.num_dependentes("dois") is None
     assert ext.tem_dividas("não devo") is None
+    assert ext.currency("peso argentino") is None
+    assert ext.birth_date("19/09/1991") is None
 
 
 def test_empty_text_returns_none() -> None:

@@ -18,6 +18,7 @@ from banco_agil.ml.intent_router import SemanticIntentRouter
 from banco_agil.ml.safety_classifier import SafetyClassifier
 
 if TYPE_CHECKING:
+    from banco_agil.llm.composer import MessageComposer
     from banco_agil.llm.extract import LlmExtractor
 
 
@@ -38,6 +39,8 @@ class AppDeps:
         safety: Filtro de segurança.
         nlu: Extrator LLM opcional (interpreta respostas em linguagem natural).
             ``None`` mantém o modo determinístico/heurístico.
+        composer: Compositor LLM opcional (redige as mensagens ao cliente a
+            partir dos fatos). ``None`` usa o texto canônico determinístico.
     """
 
     settings: Settings
@@ -51,6 +54,7 @@ class AppDeps:
     intent_router: SemanticIntentRouter
     safety: SafetyClassifier
     nlu: LlmExtractor | None = None
+    composer: MessageComposer | None = None
 
 
 def build_deps(

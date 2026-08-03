@@ -19,7 +19,7 @@ ActiveAgent = Literal[
 ]
 Intent = Literal["credit", "exchange", "interview", "end", "unknown"]
 RequestStatus = Literal["pendente", "aprovado", "rejeitado"]
-RouteSource = Literal["semantic", "llm_fallback", "heuristic"]
+RouteSource = Literal["semantic", "llm_fallback", "context", "error"]
 
 
 class SessionState(TypedDict):

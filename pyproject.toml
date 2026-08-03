@@ -28,9 +28,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-embeddings = [
-    "sentence-transformers>=3.0",
-]
 observability = [
     "langfuse>=4.0",
 ]
@@ -83,6 +80,12 @@ known-first-party = ["banco_agil"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+# Deprecações de dependências (sem correção publicada) — escopadas por mensagem
+# para não mascarar deprecações do próprio código.
+filterwarnings = [
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
 
 [tool.coverage.run]
 source = ["banco_agil"]

@@ -26,7 +26,6 @@ class Settings(BaseSettings):
         langfuse_host: Host do Langfuse Cloud/self-hosted.
         fx_api_url: Template de URL da API de câmbio (`{pair}` substituível).
         fx_mock: Se True, FxClient retorna cotação mockada.
-        embeddings_model: Nome do modelo sentence-transformers (quando disponível).
         router_confidence_threshold: Limiar mínimo para aceitar intent semântico.
         safety_enabled: Liga/desliga o filtro de intenções maliciosas.
         safety_threshold: Limiar mínimo para bloquear por score do modelo.
@@ -59,7 +58,6 @@ class Settings(BaseSettings):
     fx_api_url: str = "https://economia.awesomeapi.com.br/json/last/{pair}"
     fx_mock: bool = False
 
-    embeddings_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     router_confidence_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     safety_enabled: bool = True
     safety_threshold: float = Field(default=0.80, ge=0.0, le=1.0)
