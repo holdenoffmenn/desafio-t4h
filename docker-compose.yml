@@ -3,16 +3,20 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        EXTRAS: ${DOCKER_EXTRAS:-llm-gemini,observability}
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
-      API_BASE_URL: http://api:8000
-      FX_MOCK: "true"
+      # Paths do container (sobrescrevem DATA_DIR/MODELS_DIR relativos do .env).
       DATA_DIR: /app/data
       MODELS_DIR: /app/models
       CHECKPOINTER_DB: /app/data/sessions.sqlite
+      # FX_MOCK, LLM_*, LANGFUSE_* vêm do .env — não forçar aqui.
     volumes:
       - ./data:/app/data
       - ./models:/app/models
@@ -27,12 +31,16 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-      start_period: 25s
+      start_period: 40s
 
   ui:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        EXTRAS: ${DOCKER_EXTRAS:-llm-gemini,observability}
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
     command:
       [
         "streamlit",
@@ -46,7 +54,13 @@ services:
     env_file:
       - .env
     environment:
+      # UI chama a API pelo hostname do serviço na rede do Compose.
       API_BASE_URL: http://api:8000
+      DATA_DIR: /app/data
+      MODELS_DIR: /app/models
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
     depends_on:
       api:
         condition: service_healthy
